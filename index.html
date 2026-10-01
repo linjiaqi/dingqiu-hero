@@ -131,7 +131,7 @@
     box-shadow: 0 6px 0 #e09a12;
   }
   button:active { transform: translateY(3px); box-shadow: 0 3px 0 #e09a12; }
-  button:disabled { opacity: .55; }
+  button:disabled { opacity: .6; }
   .topgap { height: 8px; }
 </style>
 </head>
@@ -139,14 +139,14 @@
 <div id="stage">
   <canvas id="c"></canvas>
   <div id="hud">
-    <div id="barlab"><span>白天</span><span>夜晚</span></div>
+    <div id="barlab"><span>操场</span><span>交接</span><span>树下</span></div>
     <div id="skybar"><i id="knob"></i></div>
-    <div id="urge">快到树下了，稳住！</div>
+    <div id="urge"></div>
   </div>
   <div id="title" class="screen show">
     <h1>顶球小英雄</h1>
     <div class="sheet">
-      <p class="task">帮他把球顶回家，别掉，到树下才能比耶。</p>
+      <p class="task">先把球顶到前面的他手里，接住后换他顶到树下。</p>
       <button id="btnStart" disabled>加载中…</button>
       <p class="hint">左右倾斜手机。电脑可用鼠标、拖动或左右方向键。</p>
     </div>
@@ -154,7 +154,7 @@
   <div id="fail" class="screen">
     <div class="topgap"></div>
     <div class="sheet">
-      <p class="big">球掉了</p>
+      <p class="big" id="failText">球掉了</p>
       <button id="btnRetry">再来一次</button>
     </div>
   </div>
@@ -171,9 +171,22 @@
 (function () {
   "use strict";
 
-  var ROUND = 55;
+  var SEG = 20;
+  var HANDOFF = 1.5;
+  var INTRO = 0.6;
+  var PATH_NARROW_START = 0.7;
+  var PATH_NARROW_END = 11 / 20;
   var BOB = [0, -9, -3.5];
   var BOB_STEP = 0.16;
+
+  // boy_victory.png is 803x1202. Raised peace-sign hand is viewer-left.
+  // Fingertip tops measured near (118, 196) and (189, 151).
+  // Ball center (96, 88) sits up-left of that V, beside the fingertips,
+  // so the fingers stay visible and the face is clear.
+  var HAND_X = 96 / 803;
+  var HAND_Y = 88 / 1202;
+  var VIC_PIVOT_X = 530 / 803;
+  var VIC_PIVOT_Y = 820 / 1202;
 
   var stage = document.getElementById("stage");
   var canvas = document.getElementById("c");
@@ -184,6 +197,7 @@
   var titleEl = document.getElementById("title");
   var failEl = document.getElementById("fail");
   var winEl = document.getElementById("win");
+  var failText = document.getElementById("failText");
   var btnStart = document.getElementById("btnStart");
 
   var W = 1, H = 1, dpr = 1;
@@ -199,6 +213,7 @@
   var gyroLean = 0;
   var lastGyro = 0;
   var orientHooked = false;
+  var orientStarted = false;
 
   var stars = [];
   var clouds = [];
@@ -207,19 +222,24 @@
 
   var st = {
     mode: "title",
+    segment: 0,
+    segT: 0,
     time: 0,
-    elapsed: 0,
     lean: 0,
     leanTarget: 0,
     bobI: 0,
     bobAcc: 0,
     ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0 },
     ballReady: false,
+    grace: 0,
+    failKind: "",
     fade: 0,
     fallT: 0,
     travel: 0,
     freezeLean: 0,
     freezeBob: 0,
+    seg1Intro: false,
+    walkerFade: 1,
     trees: []
   };
 
@@ -235,15 +255,6 @@
   function css(c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
   function smoothstep(t) { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); }
 
-  function hardness(p) {
-    var early = Math.pow(Math.min(1, p / 0.82), 1.45) * 0.38;
-    var late = Math.pow(Math.max(0, (p - 0.82) / 0.18), 1.02) * 0.62;
-    return Math.min(1, early + late);
-  }
-  function skyAmount(p) {
-    return smoothstep(clamp((p - 0.04) / 0.92, 0, 1));
-  }
-
   function mulberry32(a) {
     return function () {
       a |= 0; a = a + 0x6D2B79F5 | 0;
@@ -251,6 +262,10 @@
       t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
+  }
+
+  function skyAmount(p) {
+    return smoothstep(clamp((p - 0.04) / 0.92, 0, 1));
   }
 
   function skyColors(t) {
@@ -275,12 +290,47 @@
     if (st.mode === "title" && loaded === 3) snapBall();
   }
 
-  function progress() {
+  function journey() {
     if (st.mode === "title") return 0;
-    return clamp(st.elapsed / ROUND, 0, 1);
+    if (st.mode === "win") return 1;
+    return clamp((st.segment + clamp(st.segT / SEG, 0, 1)) / 2, 0, 1);
   }
 
-  function poseOf(lean, bobPx) {
+  function pathMul() {
+    if (st.mode === "title" || st.segment === 0) return 1;
+    var t = st.mode === "win" ? 1 : clamp(st.segT / SEG, 0, 1);
+    return lerp(PATH_NARROW_START, PATH_NARROW_END, smoothstep(t));
+  }
+
+  function goalU() {
+    if (st.mode === "title") return 0.06;
+    if (st.mode === "win") return 1;
+    var t = clamp(st.segT / SEG, 0, 1);
+    if (st.segment === 0) return lerp(0.06, 0.18, t);
+    return lerp(0.18, 1, smoothstep(t));
+  }
+
+  function ballGeom() {
+    var S = H / 800;
+    var boyH = H * 0.56;
+    var boyW = boyH * (690 / 1202);
+    var headW = (172 / 690) * boyW;
+    var visualD = headW * 1.22;
+    var bh = visualD / ((385 - 16) / 402);
+    var bw = bh * (376 / 402);
+    var r = (185 / 402) * bh;
+    return { S: S, bh: bh, bw: bw, r: r };
+  }
+
+  function segTune() {
+    var g = ballGeom();
+    if (st.segment === 0) {
+      return { kX: 22, dX: 10, kY: 48, dY: 12, grace: 0.45, failR: g.r * 1.35, g: g };
+    }
+    return { kX: 30, dX: 6.5, kY: 40, dY: 8, grace: 0.28, failR: g.r * 0.95, g: g };
+  }
+
+  function walkerPose(lean, bobPx) {
     var S = H / 800;
     var boyH = H * 0.56;
     var boyW = boyH * (690 / 1202);
@@ -292,36 +342,106 @@
     var c = Math.cos(angle), s = Math.sin(angle);
     var hx = feetX + lx * c - ly * s;
     var hy = feetY + lx * s + ly * c;
-    var headW = (172 / 690) * boyW;
-    var visualD = headW * 1.22;
-    var bh = visualD / ((385 - 16) / 402);
-    var bw = bh * (376 / 402);
-    var rContact = (185 / 402) * bh;
+    var g = ballGeom();
     return {
       S: S, boyW: boyW, boyH: boyH, angle: angle,
       feetX: feetX, feetY: feetY, hx: hx, hy: hy,
-      bh: bh, bw: bw, rContact: rContact,
-      desired: hy - rContact + 8 * S,
+      desired: hy - g.r + 8 * S,
       pivotX: 345 / 690, pivotY: 820 / 1202
     };
   }
 
-  function currentPose() {
-    if (st.mode === "fall" || st.mode === "fail") {
-      return poseOf(st.freezeLean, st.freezeBob);
+  function vicPose(feetX, feetY, boyH, angle) {
+    var boyW = boyH * (803 / 1202);
+    var lx = (HAND_X - VIC_PIVOT_X) * boyW;
+    var ly = (HAND_Y - VIC_PIVOT_Y) * boyH;
+    var c = Math.cos(angle), s = Math.sin(angle);
+    return {
+      feetX: feetX, feetY: feetY, boyW: boyW, boyH: boyH, angle: angle,
+      pivotX: VIC_PIVOT_X, pivotY: VIC_PIVOT_Y,
+      handX: feetX + lx * c - ly * s,
+      handY: feetY + lx * s + ly * c,
+      S: H / 800
+    };
+  }
+
+  function distantVic() {
+    return vicPose(W * 0.5, horizonY() - H * 0.012, H * 0.055, 0);
+  }
+
+  function meetingVic() {
+    var p = walkerPose(0, 0);
+    var boyH = H * 0.46;
+    var boyW = boyH * (803 / 1202);
+    var offX = (HAND_X - VIC_PIVOT_X) * boyW;
+    var offY = (HAND_Y - VIC_PIVOT_Y) * boyH;
+    return vicPose(p.hx - offX, p.desired - offY, boyH, 0);
+  }
+
+  function foregroundVic(lean, bobPx) {
+    var S = H / 800;
+    return vicPose(
+      W * 0.5 + lean * 12 * S,
+      H * 0.84 + bobPx * S,
+      H * 0.56,
+      lean * 0.15
+    );
+  }
+
+  function approachedVic() {
+    var u = 0;
+    if (st.mode !== "title") u = smoothstep(clamp(st.segT / (SEG - HANDOFF), 0, 1));
+    var d = distantVic();
+    var m = meetingVic();
+    return vicPose(
+      lerp(d.feetX, m.feetX, u),
+      lerp(d.feetY, m.feetY, u),
+      lerp(d.boyH, m.boyH, u),
+      0
+    );
+  }
+
+  function shownVic() {
+    if (st.segment === 0 || st.mode === "title") return approachedVic();
+    var frozen = st.mode === "fall" || st.mode === "fail";
+    var lean = frozen ? st.freezeLean : st.lean;
+    var bob = frozen ? st.freezeBob : (st.seg1Intro ? 0 : BOB[st.bobI] * 0.5);
+    var fg = foregroundVic(lean, bob);
+    if (st.seg1Intro && st.mode === "play") {
+      var k = smoothstep(clamp(st.segT / INTRO, 0, 1));
+      var m = meetingVic();
+      return vicPose(
+        lerp(m.feetX, fg.feetX, k),
+        lerp(m.feetY, fg.feetY, k),
+        lerp(m.boyH, fg.boyH, k),
+        lerp(0, fg.angle, k)
+      );
     }
-    return poseOf(st.lean, BOB[st.bobI]);
+    return fg;
+  }
+
+  function contactPoint() {
+    if (st.segment === 0) {
+      var frozen = st.mode === "fall" || st.mode === "fail";
+      var lean = frozen ? st.freezeLean : st.lean;
+      var bob = frozen ? st.freezeBob : BOB[st.bobI];
+      var p = walkerPose(lean, bob);
+      return { x: p.hx, y: p.desired };
+    }
+    var v = shownVic();
+    return { x: v.handX, y: v.handY };
   }
 
   function snapBall() {
-    var p = poseOf(0, 0);
-    st.ball.x = p.hx;
-    st.ball.y = p.desired;
+    var c = contactPoint();
+    st.ball.x = c.x;
+    st.ball.y = c.y;
     st.ball.vx = 0;
     st.ball.vy = 0;
     st.ball.rot = 0;
     st.ballReady = true;
     st.lean = 0;
+    st.leanTarget = 0;
   }
 
   function initWorld() {
@@ -397,28 +517,59 @@
     window.addEventListener("deviceorientation", onOrient);
   }
 
-  function beginRound() {
+  function beginRound(segment) {
     st.mode = "play";
-    st.elapsed = 0;
+    st.segment = segment;
+    st.segT = 0;
+    st.grace = 0;
+    st.failKind = "";
     st.fade = 0;
     st.fallT = 0;
-    st.travel = 0;
     st.bobI = 0;
     st.bobAcc = 0;
     st.lean = 0;
     st.leanTarget = 0;
     st.freezeLean = 0;
     st.freezeBob = 0;
-    initWorld();
+    st.seg1Intro = false;
+    st.walkerFade = segment === 0 ? 1 : 0;
+    if (segment === 0) {
+      st.travel = 0;
+      initWorld();
+    }
     snapBall();
     syncUI();
   }
 
+  function startSegment1() {
+    st.segment = 1;
+    st.segT = 0;
+    st.grace = 0;
+    st.seg1Intro = true;
+    st.freezeLean = st.lean;
+    st.freezeBob = BOB[st.bobI];
+    st.walkerFade = 1;
+    st.bobI = 0;
+    st.bobAcc = 0;
+    st.ball.vx = 0;
+    st.ball.vy = 0;
+    var c = contactPoint();
+    st.ball.x = c.x;
+    st.ball.y = c.y;
+  }
+
   function onStartPressed() {
-    if (loaded < 3) return;
-    requestOrient().then(function () {
-      hookOrient();
-      beginRound();
+    if (loaded < 3 || orientStarted) return;
+    orientStarted = true;
+    var pending;
+    try {
+      pending = requestOrient();
+    } catch (err) {
+      pending = Promise.resolve(false);
+    }
+    pending.then(function (ok) {
+      if (ok) hookOrient();
+      beginRound(0);
     });
   }
 
@@ -502,10 +653,11 @@
 
   function horizonY() { return H * 0.40; }
 
-  function pathHalves(h) {
+  function pathHalves() {
+    var m = pathMul();
     return {
-      near: lerp(W * 0.50, W * 0.17, h),
-      far: lerp(W * 0.075, W * 0.02, h)
+      near: W * 0.50 * m,
+      far: W * 0.075 * m
     };
   }
 
@@ -515,7 +667,7 @@
     return lerp(halves.far, halves.near, Math.pow(t, 0.9));
   }
 
-  function drawBackground(p, h, moving) {
+  function drawBackground(p) {
     var skyT = skyAmount(p);
     var col = skyColors(skyT);
     var g = ctx.createLinearGradient(0, 0, 0, horizonY() + 10);
@@ -524,7 +676,7 @@
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, H);
 
-    var sunA = 1 - smoothstep(clamp((skyT - 0.15) / 0.55, 0, 1));
+    var sunA = 1 - smoothstep(clamp((skyT - 0.15) / (11 / 20), 0, 1));
     if (sunA > 0.02) {
       var sunY = lerp(H * 0.14, H * 0.36, skyT);
       ctx.save();
@@ -555,7 +707,7 @@
       ctx.fillStyle = "#fff8dc";
       for (var i = 0; i < stars.length; i++) {
         var s = stars[i];
-        var tw = 0.45 + 0.55 * Math.abs(Math.sin(st.time * 2 + s.tw));
+        var tw = 0.45 + (11 / 20) * Math.abs(Math.sin(st.time * 2 + s.tw));
         ctx.globalAlpha = tw * smoothstep((skyT - 0.35) / 0.4);
         ctx.beginPath();
         ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
@@ -596,7 +748,7 @@
     ctx.beginPath();
     ctx.moveTo(0, horizonY() + 8);
     ctx.quadraticCurveTo(W * 0.18, horizonY() - 36, W * 0.38, horizonY() + 4);
-    ctx.quadraticCurveTo(W * 0.55, horizonY() - 28, W * 0.72, horizonY() + 6);
+    ctx.quadraticCurveTo(W * (11 / 20), horizonY() - 28, W * 0.72, horizonY() + 6);
     ctx.quadraticCurveTo(W * 0.88, horizonY() - 18, W, horizonY() + 10);
     ctx.lineTo(W, horizonY() + 30);
     ctx.lineTo(0, horizonY() + 30);
@@ -618,7 +770,7 @@
     if (flowerA > 0.05) {
       ctx.save();
       ctx.globalAlpha = flowerA;
-      var halves0 = pathHalves(h);
+      var halves0 = pathHalves();
       for (var fi = 0; fi < flowers.length; fi++) {
         var fl = flowers[fi];
         var fy = horizonY() + fl.y * (H - horizonY());
@@ -635,9 +787,9 @@
       ctx.restore();
     }
 
-    if (skyT < 0.55) {
+    if (skyT < 11 / 20) {
       ctx.save();
-      ctx.globalAlpha = (1 - skyT / 0.55) * 0.9;
+      ctx.globalAlpha = (1 - skyT / (11 / 20)) * 0.9;
       ctx.strokeStyle = "rgba(120,80,40,0.45)";
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -659,7 +811,7 @@
       ctx.restore();
     }
 
-    var halves = pathHalves(h);
+    var halves = pathHalves();
     var pathCol = mix([236, 206, 140], [58, 74, 92], skyT);
     var edgeCol = mix([214, 170, 96], [36, 48, 64], skyT);
     var hy = horizonY();
@@ -710,7 +862,7 @@
       drawTree(xT, yT, sc, skyT);
     }
 
-    var gu = Math.pow(Math.max(p, 0.015), 0.8);
+    var gu = Math.max(goalU(), 0.015);
     var gy = hy + Math.pow(gu, 1.15) * (H * 0.84 - hy);
     var gs = lerp(0.18, 2.15, gu) * (H / 800);
     drawGoalTree(W * 0.5 + W * 0.02, gy, gs, skyT);
@@ -728,6 +880,22 @@
     ctx.restore();
   }
 
+  function drawVic(pose, alpha) {
+    if (!imgWin.complete || !imgWin.naturalWidth) return;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(pose.feetX, pose.feetY);
+    ctx.rotate(pose.angle);
+    ctx.drawImage(
+      imgWin,
+      -pose.pivotX * pose.boyW,
+      -pose.pivotY * pose.boyH,
+      pose.boyW,
+      pose.boyH
+    );
+    ctx.restore();
+  }
+
   function drawBallSprite(x, y, rot, bw, bh, alpha) {
     if (!imgBall.complete || !imgBall.naturalWidth) return;
     var fx = 187.5 / 376;
@@ -740,125 +908,106 @@
     ctx.restore();
   }
 
-  function drawShadow(pose, alpha) {
+  function drawShadow(feetX, feetY, boyW, S, alpha) {
     ctx.save();
     ctx.globalAlpha = 0.22 * alpha;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(pose.feetX, pose.feetY + 8, pose.boyW * 0.28, 9 * pose.S, 0, 0, Math.PI * 2);
+    ctx.ellipse(feetX, feetY + 8, boyW * 0.28, 9 * S, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
-  function drawVictoryScene() {
-    var skyT = 1;
-    var col = skyColors(1);
-    var g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, css(col.top));
-    g.addColorStop(0.55, css(col.hor));
-    g.addColorStop(1, css(mix([16, 64, 58], [10, 36, 40], 0.4)));
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-    ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.fillStyle = "#f4f1d4";
-    for (var i = 0; i < stars.length; i++) {
-      var s = stars[i];
-      if (s.y > 0.5) continue;
-      ctx.beginPath();
-      ctx.arc(s.x * W, s.y * H * 0.8, s.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-    ctx.fillStyle = "#f6f1d2";
-    ctx.beginPath();
-    ctx.arc(W * 0.78, H * 0.14, 26 * (H / 800), 0, Math.PI * 2);
-    ctx.fill();
-    var grass = [16, 70, 62];
-    ctx.fillStyle = css(grass);
-    ctx.fillRect(0, H * 0.62, W, H * 0.38);
-    ctx.fillStyle = "#124840";
-    ctx.beginPath();
-    ctx.ellipse(W * 0.5, H * 0.78, W * 0.55, H * 0.08, 0, 0, Math.PI * 2);
-    ctx.fill();
-    drawGoalTree(W * 0.62, H * 0.86, 2.5 * (H / 800), 1);
-    drawTree(W * 0.12, H * 0.7, 1.15 * (H / 800), 1);
-    drawTree(W * 0.92, H * 0.74, 0.9 * (H / 800), 1);
-    if (imgWin.complete && imgWin.naturalWidth) {
-      var vh = H * 0.78;
-      var vw = vh * (803 / 1202);
-      var vx = W * 0.5 - vw * 0.48;
-      var vy = H * 0.18;
-      ctx.drawImage(imgWin, vx, vy, vw, vh);
-    }
-  }
-
-  function failBall(pose) {
-    var dir = st.ball.x - pose.hx;
+  function failBall(kind) {
+    var c = contactPoint();
+    var dir = st.ball.x - c.x;
     if (Math.abs(dir) < 1) dir = st.lean || 1;
     st.ball.vx += Math.sign(dir) * 80;
     st.ball.vy = Math.min(st.ball.vy, 0) - 40;
     st.freezeLean = st.lean;
-    st.freezeBob = BOB[st.bobI];
+    st.freezeBob = BOB[st.bobI] * (st.segment === 0 ? 1 : 0.5);
+    st.failKind = kind;
     st.mode = "fall";
     st.fallT = 0;
   }
 
-  function stepPlay(dt, demo) {
-    var p = demo ? 0 : clamp(st.elapsed / ROUND, 0, 1);
-    var h = demo ? 0 : hardness(p);
-    if (!demo && st.mode === "play") {
-      st.bobAcc += dt;
-      if (st.bobAcc >= BOB_STEP) {
-        st.bobAcc -= BOB_STEP;
-        st.bobI = (st.bobI + 1) % 3;
-      }
-      st.travel += dt * 0.32;
-      for (var i = 0; i < st.trees.length; i++) {
-        st.trees[i].z += dt * 0.115;
-        if (st.trees[i].z >= 1) st.trees[i].z -= 1;
-      }
-    } else if (demo) {
-      st.bobAcc += dt;
-      if (st.bobAcc >= BOB_STEP) {
-        st.bobAcc -= BOB_STEP;
-        st.bobI = (st.bobI + 1) % 3;
-      }
-      st.travel += dt * 0.12;
+  function advanceWorld(dt, rate) {
+    st.bobAcc += dt;
+    if (st.bobAcc >= BOB_STEP) {
+      st.bobAcc -= BOB_STEP;
+      st.bobI = (st.bobI + 1) % 3;
     }
+    st.travel += dt * rate;
+    for (var i = 0; i < st.trees.length; i++) {
+      st.trees[i].z += dt * rate * 0.36;
+      if (st.trees[i].z >= 1) st.trees[i].z -= 1;
+    }
+  }
 
-    st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 9));
-    var pose = poseOf(st.lean, BOB[st.bobI]);
-    var S = pose.S;
-    var G = 1700 * S;
-    var kX = lerp(26, 38, h);
-    var dX = lerp(9.2, 2.05, h);
-    var kY = lerp(50, 30, h);
-    var dY = lerp(13, 5, h);
-    var push = lerp(0.075, 0.30, h) * W;
-    var failR = lerp(0.20, 0.058, h) * W;
-    var targetX = pose.hx + st.lean * push;
-    var targetY = pose.desired - G / kY;
-    var ax = kX * (targetX - st.ball.x) - dX * st.ball.vx;
-    var ay = G + (kY * (targetY - st.ball.y) - dY * st.ball.vy);
+  function springBall(dt, tune, c) {
+    var G = 1700 * tune.g.S;
+    var targetX = c.x + st.lean * (0.35 * tune.failR);
+    var targetY = c.y - G / tune.kY;
+    var ax = tune.kX * (targetX - st.ball.x) - tune.dX * st.ball.vx;
+    var ay = G + (tune.kY * (targetY - st.ball.y) - tune.dY * st.ball.vy);
     st.ball.vx += ax * dt;
     st.ball.vy += ay * dt;
     st.ball.x += st.ball.vx * dt;
     st.ball.y += st.ball.vy * dt;
     st.ball.rot += st.ball.vx * dt * 0.012;
+  }
+
+  function stepPlay(dt, demo) {
+    if (!demo && st.mode === "play") advanceWorld(dt, 0.32);
+    else if (demo) advanceWorld(dt, 0.12);
+
+    st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 9));
+    var tune = segTune();
+    var c = contactPoint();
+
+    if (!demo && st.segment === 1 && st.seg1Intro) {
+      st.ball.x = c.x;
+      st.ball.y = c.y;
+      st.ball.vx = 0;
+      st.ball.vy = 0;
+      st.grace = 0;
+    } else {
+      springBall(dt, tune, c);
+    }
 
     if (!demo && st.mode === "play") {
-      var off = st.ball.x - pose.hx;
-      var dropped = st.ball.y > pose.desired + 40 * S;
-      if (Math.abs(off) > failR || dropped) {
-        failBall(pose);
+      if (!(st.segment === 1 && st.seg1Intro)) {
+        var dist = Math.hypot(st.ball.x - c.x, st.ball.y - c.y);
+        if (dist > tune.failR) {
+          st.grace += dt;
+          if (st.grace >= tune.grace) {
+            failBall("drop");
+            return;
+          }
+        } else {
+          st.grace = 0;
+        }
+      }
+
+      st.segT += dt;
+      if (st.segment === 1 && st.seg1Intro && st.segT >= INTRO) st.seg1Intro = false;
+
+      if (st.segment === 0 && st.segT >= SEG) {
+        st.segT = SEG;
+        var hand = meetingVic();
+        var catchR = tune.failR;
+        var cd = Math.hypot(st.ball.x - hand.handX, st.ball.y - hand.handY);
+        if (cd <= catchR) startSegment1();
+        else failBall("miss");
         return;
       }
-      st.elapsed += dt;
-      if (st.elapsed >= ROUND) {
-        st.elapsed = ROUND;
+      if (st.segment === 1 && st.segT >= SEG) {
+        st.segT = SEG;
         st.mode = "win";
         st.fade = 0;
+        st.bobI = 0;
+        st.bobAcc = 0;
+        st.seg1Intro = false;
       }
     }
   }
@@ -881,10 +1030,21 @@
     if (st.fallT > 0.95) st.mode = "fail";
   }
 
+  function stepSettle(dt) {
+    st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 3));
+    var tune = segTune();
+    var c = contactPoint();
+    springBall(dt, tune, c);
+  }
+
   function update(dt) {
     st.time += dt;
     if (!st.ballReady && loaded === 3 && W > 2) snapBall();
     if (loaded < 3 || !st.ballReady) return;
+
+    if (st.segment === 1 && st.walkerFade > 0 && st.mode !== "title") {
+      st.walkerFade = Math.max(0, st.walkerFade - dt / 0.8);
+    }
 
     if (st.mode === "title") {
       st.leanTarget = Math.sin(st.time * 0.85) * 0.32;
@@ -904,42 +1064,61 @@
     } else if (st.mode === "fall") {
       stepFall(dt);
     } else if (st.mode === "win") {
-      st.fade = Math.min(1, st.fade + dt / 0.95);
-      st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 3));
+      st.fade = Math.min(1, st.fade + dt / 0.9);
+      var n2 = Math.max(1, Math.ceil(dt / (1 / 90)));
+      var wdt = dt / n2;
+      for (var k = 0; k < n2; k++) stepSettle(wdt);
     }
   }
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
-    var p = progress();
-    var h = st.mode === "title" ? 0 : hardness(p);
-    if (st.mode === "win") h = 1;
-    var pose = currentPose();
-    var boyAlpha = st.mode === "win" ? 1 - st.fade : 1;
-    drawBackground(st.mode === "win" ? 1 : p, st.mode === "win" ? 1 : h, true);
-    drawShadow(pose, boyAlpha);
-    if (boyAlpha > 0.01) drawBoy(pose, boyAlpha);
-    if (st.mode !== "win" || st.fade < 0.98) {
-      var ba = st.mode === "win" ? 1 - st.fade : 1;
-      if (loaded === 3) drawBallSprite(st.ball.x, st.ball.y, st.ball.rot, pose.bw, pose.bh, ba);
+    var p = journey();
+    var g = ballGeom();
+    drawBackground(st.mode === "win" ? 1 : p);
+
+    if (st.segment === 0 || st.mode === "title") {
+      var wp = walkerPose(st.lean, BOB[st.bobI]);
+      if (st.mode === "fall" || st.mode === "fail") wp = walkerPose(st.freezeLean, st.freezeBob);
+      drawShadow(wp.feetX, wp.feetY, wp.boyW, wp.S, 1);
+      drawBoy(wp, 1);
+      var far = approachedVic();
+      drawShadow(far.feetX, far.feetY, far.boyW, far.S, 0.9);
+      drawVic(far, 1);
+    } else {
+      if (st.walkerFade > 0.02) {
+        var left = walkerPose(st.freezeLean, st.freezeBob);
+        var recede = 1 - st.walkerFade;
+        ctx.save();
+        ctx.translate(0, -recede * 36 * left.S);
+        drawShadow(left.feetX, left.feetY, left.boyW, left.S, st.walkerFade);
+        drawBoy(left, st.walkerFade);
+        ctx.restore();
+      }
+      var vp = shownVic();
+      drawShadow(vp.feetX, vp.feetY, vp.boyW, vp.S, 1);
+      drawVic(vp, 1);
     }
-    if (st.mode === "win" && st.fade > 0) {
-      ctx.save();
-      ctx.globalAlpha = st.fade;
-      drawVictoryScene();
-      ctx.restore();
-    }
+
+    if (loaded === 3) drawBallSprite(st.ball.x, st.ball.y, st.ball.rot, g.bw, g.bh, 1);
   }
 
   function syncUI() {
     titleEl.classList.toggle("show", st.mode === "title");
     failEl.classList.toggle("show", st.mode === "fail");
     winEl.classList.toggle("show", st.mode === "win" && st.fade > 0.42);
-    var playing = st.mode === "play" || st.mode === "fall" || st.mode === "win";
+    var playing = st.mode === "play" || st.mode === "fall" || st.mode === "win" || st.mode === "fail";
     hud.classList.toggle("show", playing);
-    var p = st.mode === "title" ? 0 : clamp(st.elapsed / ROUND, 0, 1);
+    var p = journey();
     knob.style.left = (p * 100) + "%";
-    urge.classList.toggle("show", st.mode === "play" && p > 0.8);
+    var hint = "";
+    if (st.mode === "play" && st.segment === 0 && st.segT > SEG - 4) hint = "准备交给他";
+    else if (st.mode === "play" && st.segment === 1 && st.segT > SEG - 4.5) hint = "快到树下了，稳住";
+    urge.textContent = hint;
+    urge.classList.toggle("show", hint !== "");
+    if (st.mode === "fail" || st.mode === "fall") {
+      failText.textContent = st.failKind === "miss" ? "没接住" : "球掉了";
+    }
   }
 
   var last = 0;
@@ -998,8 +1177,12 @@
   window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   btnStart.addEventListener("click", onStartPressed);
-  document.getElementById("btnRetry").addEventListener("click", onStartPressed);
-  document.getElementById("btnAgain").addEventListener("click", onStartPressed);
+  document.getElementById("btnRetry").addEventListener("click", function () {
+    beginRound(st.segment);
+  });
+  document.getElementById("btnAgain").addEventListener("click", function () {
+    beginRound(0);
+  });
 
   function markLoaded() {
     loaded++;
