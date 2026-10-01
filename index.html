@@ -148,7 +148,7 @@
     <div class="sheet">
       <p class="task">把球往上顶，别让它落到下巴下面，再顶给前面的他。</p>
       <button id="btnStart" disabled>加载中…</button>
-      <p class="hint">左右倾斜手机。电脑可用鼠标、拖动或左右方向键。</p>
+      <p class="hint">按住屏幕左右拖</p>
     </div>
   </div>
   <div id="fail" class="screen">
@@ -220,13 +220,11 @@
   var loaded = 0;
 
   var keyLeft = false, keyRight = false;
-  var pointerLean = 0;
   var mouseInside = false;
   var touchActive = false;
-  var gyroLean = 0;
-  var lastGyro = 0;
-  var orientHooked = false;
-  var orientStarted = false;
+  var pointerX = 0;
+  // Full side-to-side on arrow keys. Under 0.4s so a branch knock is catchable.
+  var KEY_CROSS_SEC = 0.36;
 
   var stars = [];
   var clouds = [];
@@ -240,6 +238,9 @@
     time: 0,
     lean: 0,
     leanTarget: 0,
+    aimX: 0,
+    aimReady: false,
+    freezeAim: 0,
     bobI: 0,
     bobAcc: 0,
     ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0 },
@@ -309,7 +310,14 @@
     canvas.width = Math.max(1, Math.round(W * dpr));
     canvas.height = Math.max(1, Math.round(H * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
+    if (W > 2) {
+      if (!st.aimReady) {
+        st.aimX = W * 0.5;
+        st.aimReady = true;
+      }
+      var lim = xLimits("walk", H * 0.56);
+      st.aimX = clamp(st.aimX, lim.minC, lim.maxC);
+    }
   }
 
   function journey() {
@@ -381,14 +389,11 @@
     );
   }
 
-  function playPose(kind, lean, bobPx) {
+  function playPose(kind, aimX, bobPx) {
     var boyH = H * 0.56;
-    var spec = kindSpec(kind);
-    var boyW = boyH * (spec.iw / 1202);
-    var lx = (spec.cx - spec.px) * boyW;
-    var feetX = W * 0.5 - lx + lean * 12 * (H / 800);
+    var feetX = feetForCrown(kind, boyH, aimX);
     var feetY = H * 0.84 + (bobPx || 0) * (H / 800);
-    return actorPose(kind, feetX, feetY, boyH, lean);
+    return actorPose(kind, feetX, feetY, boyH, 0);
   }
 
   function farVic() {
@@ -416,18 +421,18 @@
 
   function activePose() {
     var frozen = st.mode === "fall" || st.mode === "fail";
-    var lean = frozen ? st.freezeLean : st.lean;
+    var aim = frozen ? st.freezeAim : st.aimX;
     var bob = frozen ? st.freezeBob : (st.finale || st.mode === "win" ? 0 : BOB[st.bobI]);
-    if (st.mode === "win" || st.finale) return playPose("vic", lean, 0);
-    if (st.segment === 0 || st.mode === "title") return playPose("walk", lean, bob);
-    return playPose("vic", lean, bob);
+    if (st.mode === "win" || st.finale) return playPose("vic", aim, 0);
+    if (st.segment === 0 || st.mode === "title") return playPose("walk", aim, bob);
+    return playPose("vic", aim, bob);
   }
 
   function controlPose() {
     if (st.needFirst && st.hPair) {
       var p = st.hPair.vic;
-      var S = H / 800;
-      return actorPose("vic", p.feetX + st.lean * 12 * S, p.feetY, p.boyH, st.lean);
+      var feetX = feetForCrown("vic", p.boyH, st.aimX);
+      return actorPose("vic", feetX, p.feetY, p.boyH, 0);
     }
     if (st.settle > 0 && st.hPair) return settlePack().vic;
     return activePose();
@@ -489,7 +494,8 @@
     st.mode = "fall";
     st.failKind = "drop";
     st.fallT = 0;
-    st.freezeLean = st.lean;
+    st.freezeLean = 0;
+    st.freezeAim = st.aimX;
     st.freezeBob = 0;
     st.finale = false;
     st.launch = false;
@@ -588,30 +594,51 @@
     for (var b = 0; b < 3; b++) birds.push({ x: rnd(), y: 0.1 + rnd() * 0.12, sp: 0.02 + rnd() * 0.03, ph: rnd() * 6 });
   }
 
-  function gyroFresh() { return lastGyro > 0 && (performance.now() - lastGyro) < 500; }
-  function onOrient(e) {
-    if (e.gamma == null || isNaN(e.gamma)) return;
-    lastGyro = performance.now();
-    gyroLean = clamp(e.gamma / 28, -1, 1);
-  }
-  function desiredLean() {
-    if (keyLeft !== keyRight) return keyLeft ? -1 : 1;
-    if (touchActive) return pointerLean;
-    if (mouseInside) return pointerLean;
-    if (gyroFresh()) return gyroLean;
-    return 0;
-  }
-  function requestOrient() {
-    var D = window.DeviceOrientationEvent;
-    if (D && typeof D.requestPermission === "function") {
-      return D.requestPermission().then(function (res) { return res === "granted"; }).catch(function () { return false; });
+  // Crown X the sprite can reach while the whole boy stays on screen.
+  function xLimits(kind, boyH) {
+    var spec = kindSpec(kind);
+    var boyW = boyH * (spec.iw / 1202);
+    var lx = (spec.cx - spec.px) * boyW;
+    var margin = Math.max(4, W * 0.012);
+    var minF = margin + spec.px * boyW;
+    var maxF = W - margin - (1 - spec.px) * boyW;
+    if (minF > maxF) {
+      var mid = (minF + maxF) * 0.5;
+      return { minF: mid, maxF: mid, minC: mid + lx, maxC: mid + lx, lx: lx, margin: margin };
     }
-    return Promise.resolve(true);
+    return { minF: minF, maxF: maxF, minC: minF + lx, maxC: maxF + lx, lx: lx, margin: margin };
   }
-  function hookOrient() {
-    if (orientHooked) return;
-    orientHooked = true;
-    window.addEventListener("deviceorientation", onOrient);
+
+  function feetForCrown(kind, boyH, crownX) {
+    var lim = xLimits(kind, boyH);
+    return clamp(crownX - lim.lx, lim.minF, lim.maxF);
+  }
+
+  function controlBox() {
+    var kind = "walk";
+    var boyH = H * 0.56;
+    if ((st.needFirst && st.hPair) || st.segment === 1 || st.finale || st.mode === "win") kind = "vic";
+    if (st.needFirst && st.hPair) boyH = st.hPair.vic.boyH;
+    var lim = xLimits(kind, boyH);
+    return { kind: kind, boyH: boyH, lim: lim };
+  }
+
+  // Direct horizontal control. No tilt, no return-to-center.
+  // Touch drag and mouse x set aim immediately (smoothing time constant 0).
+  // Arrow keys slide across the full crown span in KEY_CROSS_SEC (0.36s).
+  function applyInput(dt) {
+    if (st.settle > 0) return;
+    var lim = controlBox().lim;
+    if (touchActive) {
+      st.aimX = pointerX;
+    } else if (keyLeft !== keyRight) {
+      var span = Math.max(0, lim.maxC - lim.minC);
+      var speed = span / KEY_CROSS_SEC;
+      st.aimX += (keyLeft ? -speed : speed) * dt;
+    } else if (mouseInside) {
+      st.aimX = pointerX;
+    }
+    st.aimX = clamp(st.aimX, lim.minC, lim.maxC);
   }
 
   function beginRound(segment) {
@@ -630,6 +657,7 @@
     st.lean = 0;
     st.leanTarget = 0;
     st.freezeLean = 0;
+    st.aimX = W * 0.5;
     st.freezeBob = 0;
     st.hPair = null;
     if (segment === 0) {
@@ -647,15 +675,8 @@
   }
 
   function onStartPressed() {
-    if (loaded < 3 || orientStarted) return;
-    orientStarted = true;
-    var pending;
-    try { pending = requestOrient(); }
-    catch (err) { pending = Promise.resolve(false); }
-    pending.then(function (ok) {
-      if (ok) hookOrient();
-      beginRound(0);
-    });
+    if (loaded < 3) return;
+    beginRound(0);
   }
 
   function startHandoff() {
@@ -667,7 +688,7 @@
     st.launch = false;
     st.needFirst = false;
     st.settle = 0;
-    st.hWalk0 = plain(playPose("walk", st.lean, BOB[st.bobI]));
+    st.hWalk0 = plain(playPose("walk", st.aimX, BOB[st.bobI]));
     st.hVic0 = plain(farVic());
     st.hPair = stagedPair();
   }
@@ -690,13 +711,11 @@
     var u = smoothstep(1 - clamp(st.settle / RETREAT, 0, 1));
     var pair = st.hPair;
     var walkEnd = { kind: "walk", feetX: W * 0.5, feetY: horizonY() + H * 0.05, boyH: H * 0.048, lean: 0 };
-    var vicPlay = playPose("vic", 0, 0);
+    var vicPlay = playPose("vic", W * 0.5, 0);
     var vicEnd = { kind: "vic", feetX: vicPlay.feetX, feetY: vicPlay.feetY, boyH: vicPlay.boyH, lean: 0 };
     var walk = lerpPlain(pair.walk, walkEnd, u);
     var vicScript = lerpPlain(pair.vic, vicEnd, u);
-    var S = H / 800;
-    var vic = actorPose("vic", vicScript.feetX + st.lean * 12 * S, vicScript.feetY, vicScript.boyH, st.lean);
-    return { walk: walk, vic: vic, scripted: vicScript, walkA: 1 - u };
+    return { walk: walk, vic: vicScript, scripted: vicScript, walkA: 1 - u };
   }
 
   function nudgeBallToScript() {
@@ -734,6 +753,7 @@
     st.phase = "";
     st.lean = 0;
     st.leanTarget = 0;
+    st.aimX = pose.crownX;
     st.bobI = 0;
     st.bobAcc = 0;
     st.branch = null;
@@ -1123,13 +1143,13 @@
     if (st.mode !== "play") return;
     var cinematic = st.needFirst || st.settle > 0 || st.finale;
     if (!cinematic) advanceWorld(dt, 0.32);
-    st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 9));
     if (st.settle > 0) {
       nudgeBallToScript();
       st.settle -= dt;
       if (st.settle <= 0) {
         st.settle = 0;
         st.prevCrown = 0;
+        st.aimX = W * 0.5;
       }
     }
     updateBranch(dt);
@@ -1161,11 +1181,9 @@
 
   function stepTitle(dt) {
     advanceWorld(dt, 0.1);
-    var pose0 = playPose("walk", st.lean, BOB[st.bobI]);
-    var hw = headHalf(pose0);
-    st.leanTarget = clamp((st.ball.x - pose0.crownX) / hw, -1, 1);
-    st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 10));
-    stepBall(dt, playPose("walk", st.lean, BOB[st.bobI]), { title: true });
+    var lim = xLimits("walk", H * 0.56);
+    st.aimX = clamp(st.ball.x, lim.minC, lim.maxC);
+    stepBall(dt, playPose("walk", st.aimX, BOB[st.bobI]), { title: true });
   }
 
   function stepHandoff(dt) {
@@ -1217,7 +1235,7 @@
   function update(dt) {
     st.time += dt;
     if (!st.ballReady && loaded === 3 && W > 2) {
-      tossAbove(playPose("walk", 0, 0));
+      tossAbove(playPose("walk", W * 0.5, 0));
       st.ballReady = true;
     }
     if (loaded < 3 || !st.ballReady) return;
@@ -1227,11 +1245,9 @@
     if (st.mode === "title") {
       for (var i = 0; i < n; i++) stepTitle(h);
     } else if (st.mode === "play") {
-      var d = desiredLean();
-      if (Math.abs(d) < 0.045) d = 0;
-      st.leanTarget = d;
       for (var j = 0; j < n; j++) {
         if (st.mode !== "play") break;
+        applyInput(h);
         stepPlay(h);
       }
     } else if (st.mode === "handoff") {
@@ -1243,19 +1259,18 @@
       stepFall(dt);
     } else if (st.mode === "win") {
       st.fade = Math.min(1, st.fade + dt / 0.85);
-      st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 3));
     }
   }
 
   function visualPair() {
     if (st.mode === "handoff") return handoffActors();
     if (st.needFirst && st.hPair) {
-      var S = H / 800;
       var w = st.hPair.walk;
       var v = st.hPair.vic;
+      var feetX = feetForCrown("vic", v.boyH, st.aimX);
       return {
         walk: actorPose("walk", w.feetX, w.feetY, w.boyH, 0),
-        vic: actorPose("vic", v.feetX + st.lean * 12 * S, v.feetY, v.boyH, st.lean),
+        vic: actorPose("vic", feetX, v.feetY, v.boyH, 0),
         walkA: 1
       };
     }
@@ -1318,35 +1333,41 @@
     requestAnimationFrame(frame);
   }
 
-  function pointerFromEvent(e) {
+  function stageLocalX(clientX) {
     var r = stage.getBoundingClientRect();
-    var x = e.clientX - r.left;
-    pointerLean = clamp((x - r.width / 2) / (r.width * 0.36), -1, 1);
+    return clientX - r.left;
   }
 
-  stage.addEventListener("pointerdown", function (e) {
-    if (e.pointerType === "touch") {
-      touchActive = true;
-      try { stage.setPointerCapture(e.pointerId); } catch (err) {}
-      pointerFromEvent(e);
-    }
+  window.addEventListener("pointerdown", function (e) {
+    if (e.pointerType !== "touch") return;
+    if (e.target && e.target.closest && e.target.closest("button")) return;
+    touchActive = true;
+    pointerX = stageLocalX(e.clientX);
+    try { stage.setPointerCapture(e.pointerId); } catch (err) {}
   });
-  stage.addEventListener("pointermove", function (e) {
+  window.addEventListener("pointermove", function (e) {
     if (e.pointerType === "mouse") {
       mouseInside = true;
-      pointerFromEvent(e);
+      pointerX = stageLocalX(e.clientX);
     } else if (touchActive) {
-      pointerFromEvent(e);
+      pointerX = stageLocalX(e.clientX);
     }
   });
-  stage.addEventListener("pointerup", function (e) {
+  window.addEventListener("pointerup", function (e) {
     if (e.pointerType === "touch") touchActive = false;
   });
-  stage.addEventListener("pointercancel", function () { touchActive = false; });
-  stage.addEventListener("pointerleave", function (e) {
-    if (e.pointerType === "mouse") mouseInside = false;
+  window.addEventListener("pointercancel", function () { touchActive = false; });
+  window.addEventListener("blur", function () {
+    touchActive = false;
+    keyLeft = false;
+    keyRight = false;
   });
-  stage.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
+  document.addEventListener("pointerout", function (e) {
+    if (e.pointerType === "mouse" && !e.relatedTarget) mouseInside = false;
+  });
+  window.addEventListener("touchmove", function (e) {
+    if (touchActive) e.preventDefault();
+  }, { passive: false });
 
   window.addEventListener("keydown", function (e) {
     if (e.key === "ArrowLeft") { keyLeft = true; e.preventDefault(); }
@@ -1377,7 +1398,7 @@
       btnStart.textContent = "开始";
       initWorld();
       resize();
-      tossAbove(playPose("walk", 0, 0));
+      tossAbove(playPose("walk", W * 0.5, 0));
       st.ballReady = true;
     }
   }
