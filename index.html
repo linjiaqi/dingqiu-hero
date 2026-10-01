@@ -511,9 +511,11 @@
     st.ball.x += st.ball.vx * dt;
     st.ball.y += st.ball.vy * dt;
     st.ball.rot += st.ball.vx * dt * 0.012;
+    keepBallInReach();
     if (st.ball.vy > 0 && zoneHit(pose)) {
       var finalePop = !!opt.finale && !st.launch;
       applyHeader(pose, finalePop);
+      keepBallInReach();
       if (finalePop) st.launch = true;
       if (opt.onHeader) opt.onHeader();
       return;
@@ -565,6 +567,7 @@
       st.branch.hit = true;
       var pose = controlPose();
       st.ball.vx += st.branch.dir * headHalf(pose) * 3.1;
+      keepBallInReach();
     }
   }
 
@@ -594,19 +597,46 @@
     for (var b = 0; b < 3; b++) birds.push({ x: rnd(), y: 0.1 + rnd() * 0.12, sp: 0.02 + rnd() * 0.03, ph: rnd() * 6 });
   }
 
-  // Crown X the sprite can reach while the whole boy stays on screen.
+  // Crown center may travel almost the full stage. Inset by one ball radius
+  // so the ball is not clipped. Feet may leave the screen; only the crown
+  // has to stay over the ball.
+  function reachX() {
+    var inset = ballGeom().r;
+    if (!(W > inset * 2)) {
+      var mid = W * 0.5;
+      return { minC: mid, maxC: mid, inset: inset };
+    }
+    return { minC: inset, maxC: W - inset, inset: inset };
+  }
+
   function xLimits(kind, boyH) {
     var spec = kindSpec(kind);
     var boyW = boyH * (spec.iw / 1202);
     var lx = (spec.cx - spec.px) * boyW;
-    var margin = Math.max(4, W * 0.012);
-    var minF = margin + spec.px * boyW;
-    var maxF = W - margin - (1 - spec.px) * boyW;
-    if (minF > maxF) {
-      var mid = (minF + maxF) * 0.5;
-      return { minF: mid, maxF: mid, minC: mid + lx, maxC: mid + lx, lx: lx, margin: margin };
+    var reach = reachX();
+    var minC = reach.minC;
+    var maxC = reach.maxC;
+    return {
+      minF: minC - lx,
+      maxF: maxC - lx,
+      minC: minC,
+      maxC: maxC,
+      lx: lx,
+      margin: reach.inset
+    };
+  }
+
+  // Pull ball.x back into the crown span. Only the outward vx is cleared,
+  // so the ball drops back inside instead of sticking or tunneling out.
+  function keepBallInReach() {
+    var lim = reachX();
+    if (st.ball.x <= lim.minC) {
+      st.ball.x = lim.minC;
+      if (st.ball.vx < 0) st.ball.vx = 0;
+    } else if (st.ball.x >= lim.maxC) {
+      st.ball.x = lim.maxC;
+      if (st.ball.vx > 0) st.ball.vx = 0;
     }
-    return { minF: minF, maxF: maxF, minC: minF + lx, maxC: maxF + lx, lx: lx, margin: margin };
   }
 
   function feetForCrown(kind, boyH, crownX) {
@@ -723,6 +753,7 @@
     var c = pack.scripted.crownX;
     if (st.prevCrown) st.ball.x += c - st.prevCrown;
     st.prevCrown = c;
+    keepBallInReach();
   }
 
   function arcPoint(t) {
@@ -1197,6 +1228,7 @@
       st.ball.y = actors.walk.crownY - r * 1.5;
       st.ball.vx = 0;
       st.ball.vy = 0;
+      keepBallInReach();
       if (st.phaseT >= ARRANGE) {
         st.phase = "arc";
         st.phaseT = 0;
@@ -1208,6 +1240,7 @@
     st.ball.x = p.x;
     st.ball.y = p.y;
     st.ball.rot += dt * 2.2;
+    keepBallInReach();
     if (st.phaseT >= ARC) releaseAboveVic();
   }
 
@@ -1219,6 +1252,7 @@
     st.ball.x += st.ball.vx * dt;
     st.ball.y += st.ball.vy * dt;
     st.ball.rot += st.ball.vx * dt * 0.02;
+    keepBallInReach();
     var ground = H * 0.9;
     if (st.ball.y > ground) {
       st.ball.y = ground;
