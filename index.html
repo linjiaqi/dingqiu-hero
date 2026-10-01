@@ -1307,6 +1307,7 @@
     if (st.mode === "fail" || st.mode === "fall") failText.textContent = "球掉了";
   }
 
+  var last = 0;
   function frame(ts) {
     if (!last) last = ts;
     var dt = Math.min(0.05, (ts - last) / 1000);
