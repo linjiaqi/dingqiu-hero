@@ -146,7 +146,7 @@
   <div id="title" class="screen show">
     <h1>顶球小英雄</h1>
     <div class="sheet">
-      <p class="task">先把球顶到前面的他手里，接住后换他顶到树下。</p>
+      <p class="task">先把球稳在发顶往前走，再顶到他的发顶上，换他走到树下。</p>
       <button id="btnStart" disabled>加载中…</button>
       <p class="hint">左右倾斜手机。电脑可用鼠标、拖动或左右方向键。</p>
     </div>
@@ -168,25 +168,34 @@
   </div>
 </div>
 <script>
+
 (function () {
   "use strict";
 
   var SEG = 20;
-  var HANDOFF = 1.5;
-  var INTRO = 0.6;
-  var PATH_NARROW_START = 0.7;
-  var PATH_NARROW_END = 11 / 20;
-  var BOB = [0, -9, -3.5];
+  var ARRANGE = 0.48;
+  var ARC = 0.9;
+  var RETREAT = 0.95;
+  var SWEEP = 2.2;
+  var CROWN_K = 9;
+  var CROWN_D = 1.2;
+  var BOB = [0, -6, -2];
   var BOB_STEP = 0.16;
-
-  // boy_victory.png is 803x1202. Raised peace-sign hand is viewer-left.
-  // Fingertip tops measured near (118, 196) and (189, 151).
-  // Ball center (96, 88) sits up-left of that V, beside the fingertips,
-  // so the fingers stay visible and the face is clear.
-  var HAND_X = 96 / 803;
-  var HAND_Y = 88 / 1202;
-  var VIC_PIVOT_X = 530 / 803;
-  var VIC_PIVOT_Y = 820 / 1202;
+  // Hair-top centers, measured from opaque pixels. Not the peace-sign hand.
+  // boy_walk.png 690x1202: cap centroid near (322, 18). Old (312, 22) sat left of the cap.
+  // boy_victory.png 803x1202: head-top centroid near (375, 18). Raised hand is around x 96-190.
+  var WALK_CX = 322 / 690;
+  var WALK_CY = 18 / 1202;
+  var WALK_PX = 345 / 690;
+  var WALK_PY = 820 / 1202;
+  var VIC_CX = 375 / 803;
+  var VIC_CY = 18 / 1202;
+  var VIC_PX = 530 / 803;
+  var VIC_PY = 820 / 1202;
+  var BRANCHES = [
+    [{ t: 3.5, dir: 1 }, { t: 11.4, dir: -1 }],
+    [{ t: 2.6, dir: 1 }, { t: 8.4, dir: -1 }, { t: 14.2, dir: 1 }]
+  ];
 
   var stage = document.getElementById("stage");
   var canvas = document.getElementById("c");
@@ -231,15 +240,23 @@
     bobAcc: 0,
     ball: { x: 0, y: 0, vx: 0, vy: 0, rot: 0 },
     ballReady: false,
-    grace: 0,
-    failKind: "",
+    onCrown: true,
+    off: 0,
+    bvx: 0,
+    off0: 0,
+    failKind: "drop",
     fade: 0,
     fallT: 0,
     travel: 0,
     freezeLean: 0,
     freezeBob: 0,
-    seg1Intro: false,
-    walkerFade: 1,
+    branch: null,
+    branchN: 0,
+    phase: "",
+    phaseT: 0,
+    hWalk0: null,
+    hVic0: null,
+    hPair: null,
     trees: []
   };
 
@@ -287,27 +304,27 @@
     canvas.width = Math.max(1, Math.round(W * dpr));
     canvas.height = Math.max(1, Math.round(H * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (st.mode === "title" && loaded === 3) snapBall();
+    if (st.ballReady && st.onCrown && st.mode !== "handoff") placeOnCrown(activePose());
   }
 
   function journey() {
     if (st.mode === "title") return 0;
     if (st.mode === "win") return 1;
-    return clamp((st.segment + clamp(st.segT / SEG, 0, 1)) / 2, 0, 1);
+    if (st.segment === 0 || st.mode === "handoff") return clamp(st.segT / SEG, 0, 1) * 0.5;
+    return 0.5 + clamp(st.segT / SEG, 0, 1) * 0.5;
   }
 
   function pathMul() {
-    if (st.mode === "title" || st.segment === 0) return 1;
+    if (st.mode === "title" || st.segment === 0 || st.mode === "handoff") return 1;
     var t = st.mode === "win" ? 1 : clamp(st.segT / SEG, 0, 1);
-    return lerp(PATH_NARROW_START, PATH_NARROW_END, smoothstep(t));
+    return lerp(0.7, 11 / 20, smoothstep(t));
   }
 
   function goalU() {
-    if (st.mode === "title") return 0.06;
+    if (st.mode === "title") return 0.08;
     if (st.mode === "win") return 1;
-    var t = clamp(st.segT / SEG, 0, 1);
-    if (st.segment === 0) return lerp(0.06, 0.18, t);
-    return lerp(0.18, 1, smoothstep(t));
+    if (st.segment === 0 || st.mode === "handoff") return 0.2;
+    return lerp(0.2, 1, smoothstep(clamp(st.segT / SEG, 0, 1)));
   }
 
   function ballGeom() {
@@ -322,126 +339,169 @@
     return { S: S, bh: bh, bw: bw, r: r };
   }
 
-  function segTune() {
-    var g = ballGeom();
-    if (st.segment === 0) {
-      return { kX: 22, dX: 10, kY: 48, dY: 12, grace: 0.45, failR: g.r * 1.35, g: g };
+  function crownEdge() { return ballGeom().r * 0.62; }
+
+  function kindSpec(kind) {
+    if (kind === "walk") {
+      return { cx: WALK_CX, cy: WALK_CY, px: WALK_PX, py: WALK_PY, iw: 690 };
     }
-    return { kX: 30, dX: 6.5, kY: 40, dY: 8, grace: 0.28, failR: g.r * 0.95, g: g };
+    return { cx: VIC_CX, cy: VIC_CY, px: VIC_PX, py: VIC_PY, iw: 803 };
   }
 
-  function walkerPose(lean, bobPx) {
-    var S = H / 800;
-    var boyH = H * 0.56;
-    var boyW = boyH * (690 / 1202);
+  function actorPose(kind, feetX, feetY, boyH, lean) {
+    var spec = kindSpec(kind);
+    var boyW = boyH * (spec.iw / 1202);
     var angle = lean * 0.15;
-    var lx = ((312 - 345) / 690) * boyW;
-    var ly = ((22 - 820) / 1202) * boyH;
-    var feetX = W * 0.5 - ((312 - 345) / 690) * boyW + lean * 12 * S;
-    var feetY = H * 0.84 + bobPx * S;
-    var c = Math.cos(angle), s = Math.sin(angle);
-    var hx = feetX + lx * c - ly * s;
-    var hy = feetY + lx * s + ly * c;
-    var g = ballGeom();
+    var lx = (spec.cx - spec.px) * boyW;
+    var ly = (spec.cy - spec.py) * boyH;
+    var co = Math.cos(angle), si = Math.sin(angle);
     return {
-      S: S, boyW: boyW, boyH: boyH, angle: angle,
-      feetX: feetX, feetY: feetY, hx: hx, hy: hy,
-      desired: hy - g.r + 8 * S,
-      pivotX: 345 / 690, pivotY: 820 / 1202
-    };
-  }
-
-  function vicPose(feetX, feetY, boyH, angle) {
-    var boyW = boyH * (803 / 1202);
-    var lx = (HAND_X - VIC_PIVOT_X) * boyW;
-    var ly = (HAND_Y - VIC_PIVOT_Y) * boyH;
-    var c = Math.cos(angle), s = Math.sin(angle);
-    return {
-      feetX: feetX, feetY: feetY, boyW: boyW, boyH: boyH, angle: angle,
-      pivotX: VIC_PIVOT_X, pivotY: VIC_PIVOT_Y,
-      handX: feetX + lx * c - ly * s,
-      handY: feetY + lx * s + ly * c,
+      kind: kind, feetX: feetX, feetY: feetY, boyW: boyW, boyH: boyH,
+      angle: angle, lean: lean, pivotX: spec.px, pivotY: spec.py,
+      crownX: feetX + lx * co - ly * si,
+      crownY: feetY + lx * si + ly * co,
       S: H / 800
     };
   }
 
-  function distantVic() {
-    return vicPose(W * 0.5, horizonY() - H * 0.012, H * 0.055, 0);
+  function plain(pose) {
+    return { kind: pose.kind, feetX: pose.feetX, feetY: pose.feetY, boyH: pose.boyH, lean: pose.lean || 0 };
   }
 
-  function meetingVic() {
-    var p = walkerPose(0, 0);
-    var boyH = H * 0.46;
-    var boyW = boyH * (803 / 1202);
-    var offX = (HAND_X - VIC_PIVOT_X) * boyW;
-    var offY = (HAND_Y - VIC_PIVOT_Y) * boyH;
-    return vicPose(p.hx - offX, p.desired - offY, boyH, 0);
-  }
-
-  function foregroundVic(lean, bobPx) {
-    var S = H / 800;
-    return vicPose(
-      W * 0.5 + lean * 12 * S,
-      H * 0.84 + bobPx * S,
-      H * 0.56,
-      lean * 0.15
+  function lerpPlain(a, b, t) {
+    return actorPose(
+      a.kind,
+      lerp(a.feetX, b.feetX, t),
+      lerp(a.feetY, b.feetY, t),
+      lerp(a.boyH, b.boyH, t),
+      lerp(a.lean || 0, b.lean || 0, t)
     );
   }
 
-  function approachedVic() {
-    var u = 0;
-    if (st.mode !== "title") u = smoothstep(clamp(st.segT / (SEG - HANDOFF), 0, 1));
-    var d = distantVic();
-    var m = meetingVic();
-    return vicPose(
-      lerp(d.feetX, m.feetX, u),
-      lerp(d.feetY, m.feetY, u),
-      lerp(d.boyH, m.boyH, u),
-      0
-    );
+  function playPose(kind, lean, bobPx) {
+    var boyH = H * 0.56;
+    var spec = kindSpec(kind);
+    var boyW = boyH * (spec.iw / 1202);
+    var lx = (spec.cx - spec.px) * boyW;
+    var feetX = W * 0.5 - lx + lean * 12 * (H / 800);
+    var feetY = H * 0.84 + (bobPx || 0) * (H / 800);
+    return actorPose(kind, feetX, feetY, boyH, lean);
   }
 
-  function shownVic() {
-    if (st.segment === 0 || st.mode === "title") return approachedVic();
+  function farVic() {
+    return actorPose("vic", W * 0.5, horizonY() + H * 0.045, H * 0.062, 0);
+  }
+
+  function stagedPair() {
+    var s = H * 0.3;
+    var wW = s * (690 / 1202);
+    var wV = s * (803 / 1202);
+    var gap = wW;
+    var total = wW + gap + wV;
+    var fit = Math.max(40, W - 8);
+    if (total > fit) {
+      var k = fit / total;
+      s *= k; wW *= k; wV *= k; gap *= k; total *= k;
+    }
+    var left = (W - total) / 2;
+    var fy = H * 0.84;
+    return {
+      walk: { kind: "walk", feetX: left + WALK_PX * wW, feetY: fy, boyH: s, lean: 0 },
+      vic: { kind: "vic", feetX: left + wW + gap + VIC_PX * wV, feetY: fy, boyH: s, lean: 0 }
+    };
+  }
+
+  function activePose() {
     var frozen = st.mode === "fall" || st.mode === "fail";
     var lean = frozen ? st.freezeLean : st.lean;
-    var bob = frozen ? st.freezeBob : (st.seg1Intro ? 0 : BOB[st.bobI] * 0.5);
-    var fg = foregroundVic(lean, bob);
-    if (st.seg1Intro && st.mode === "play") {
-      var k = smoothstep(clamp(st.segT / INTRO, 0, 1));
-      var m = meetingVic();
-      return vicPose(
-        lerp(m.feetX, fg.feetX, k),
-        lerp(m.feetY, fg.feetY, k),
-        lerp(m.boyH, fg.boyH, k),
-        lerp(0, fg.angle, k)
-      );
-    }
-    return fg;
+    var bob = frozen ? st.freezeBob : BOB[st.bobI];
+    if (st.mode === "win") return playPose("vic", st.lean, 0);
+    if (st.segment === 0 || st.mode === "title") return playPose("walk", lean, bob);
+    return playPose("vic", lean, bob);
   }
 
-  function contactPoint() {
-    if (st.segment === 0) {
-      var frozen = st.mode === "fall" || st.mode === "fail";
-      var lean = frozen ? st.freezeLean : st.lean;
-      var bob = frozen ? st.freezeBob : BOB[st.bobI];
-      var p = walkerPose(lean, bob);
-      return { x: p.hx, y: p.desired };
-    }
-    var v = shownVic();
-    return { x: v.handX, y: v.handY };
+  function placeOnCrown(pose) {
+    var g = ballGeom();
+    var edge = crownEdge();
+    var u = edge > 1 ? st.off / edge : 0;
+    var drop = edge * 0.5 * u * u;
+    st.ball.x = pose.crownX + st.off;
+    st.ball.y = pose.crownY - g.r + g.r * 0.08 + drop;
   }
 
-  function snapBall() {
-    var c = contactPoint();
-    st.ball.x = c.x;
-    st.ball.y = c.y;
+  function seedOff() {
+    var edge = crownEdge();
+    st.off = (Math.random() < 0.5 ? -1 : 1) * edge * 0.11;
+    st.bvx = 0;
+    st.onCrown = true;
     st.ball.vx = 0;
     st.ball.vy = 0;
-    st.ball.rot = 0;
-    st.ballReady = true;
-    st.lean = 0;
-    st.leanTarget = 0;
+  }
+
+  function loseCrown(pose) {
+    var edge = crownEdge();
+    st.off = (st.off < 0 ? -1 : 1) * edge;
+    placeOnCrown(pose);
+    st.ball.vx = st.bvx;
+    st.ball.vy = 36;
+    st.onCrown = false;
+    st.freezeLean = st.lean;
+    st.freezeBob = BOB[st.bobI];
+    st.failKind = "drop";
+    st.mode = "fall";
+    st.fallT = 0;
+  }
+
+  function stepCrown(dt, pose, allowFall) {
+    var edge = crownEdge();
+    var push = 1.25 * CROWN_K * edge;
+    var ax = CROWN_K * st.off - st.lean * push - CROWN_D * st.bvx;
+    st.bvx += ax * dt;
+    st.off += st.bvx * dt;
+    st.ball.rot += st.bvx * dt * 0.015;
+    if (Math.abs(st.off) > edge) {
+      if (allowFall) { loseCrown(pose); return; }
+      st.off = (Math.random() < 0.5 ? -1 : 1) * edge * 0.11;
+      st.bvx = 0;
+    }
+    if (st.onCrown) placeOnCrown(pose);
+  }
+
+  function branchX(b) {
+    var u = clamp(b.t / SWEEP, 0, 1);
+    var start = b.dir > 0 ? -b.len * 0.32 : W + b.len * 0.32;
+    var end = b.dir > 0 ? W + b.len * 0.32 : -b.len * 0.32;
+    return lerp(start, end, u);
+  }
+
+  function updateBranch(dt) {
+    if (st.mode !== "play") return;
+    var plan = BRANCHES[st.segment];
+    if (!st.branch && st.branchN < plan.length && st.segT >= plan[st.branchN].t) {
+      var spec = plan[st.branchN];
+      st.branch = {
+        dir: spec.dir,
+        t: 0,
+        hit: false,
+        y: st.ball.y,
+        len: Math.min(W * 0.68, H * 0.4)
+      };
+      st.branchN += 1;
+    }
+    if (!st.branch) return;
+    st.branch.t += dt;
+    if (st.branch.t >= SWEEP) { st.branch = null; return; }
+    if (st.branch.hit || !st.onCrown) return;
+    var x = branchX(st.branch);
+    var half = st.branch.len * 0.5;
+    var nearest = clamp(st.ball.x, x - half, x + half);
+    var dx = st.ball.x - nearest;
+    var dy = st.ball.y - st.branch.y;
+    var reach = ballGeom().r * 0.88;
+    if (dx * dx + dy * dy <= reach * reach) {
+      st.branch.hit = true;
+      st.bvx += st.branch.dir * 2.05 * crownEdge();
+    }
   }
 
   function initWorld() {
@@ -458,41 +518,24 @@
     }
     stars = [];
     rnd = mulberry32(3);
-    for (var s = 0; s < 36; s++) {
-      stars.push({ x: rnd(), y: rnd() * 0.42, r: 0.6 + rnd() * 1.5, tw: rnd() * 6 });
-    }
+    for (var s = 0; s < 36; s++) stars.push({ x: rnd(), y: rnd() * 0.42, r: 0.6 + rnd() * 1.5, tw: rnd() * 6 });
     clouds = [];
     rnd = mulberry32(5);
-    for (var k = 0; k < 4; k++) {
-      clouds.push({ x: rnd(), y: 0.08 + rnd() * 0.18, sc: 0.7 + rnd() * 0.8, sp: 0.012 + rnd() * 0.02 });
-    }
+    for (var k = 0; k < 4; k++) clouds.push({ x: rnd(), y: 0.08 + rnd() * 0.18, sc: 0.7 + rnd() * 0.8, sp: 0.012 + rnd() * 0.02 });
     flowers = [];
     rnd = mulberry32(9);
-    for (var f = 0; f < 22; f++) {
-      flowers.push({
-        x: rnd(),
-        y: 0.46 + rnd() * 0.5,
-        sc: 0.6 + rnd() * 0.8,
-        hue: rnd()
-      });
-    }
+    for (var f = 0; f < 22; f++) flowers.push({ x: rnd(), y: 0.46 + rnd() * 0.5, sc: 0.6 + rnd() * 0.8, hue: rnd() });
     birds = [];
     rnd = mulberry32(13);
-    for (var b = 0; b < 3; b++) {
-      birds.push({ x: rnd(), y: 0.1 + rnd() * 0.12, sp: 0.02 + rnd() * 0.03, ph: rnd() * 6 });
-    }
+    for (var b = 0; b < 3; b++) birds.push({ x: rnd(), y: 0.1 + rnd() * 0.12, sp: 0.02 + rnd() * 0.03, ph: rnd() * 6 });
   }
 
-  function gyroFresh() {
-    return lastGyro > 0 && (performance.now() - lastGyro) < 500;
-  }
-
+  function gyroFresh() { return lastGyro > 0 && (performance.now() - lastGyro) < 500; }
   function onOrient(e) {
     if (e.gamma == null || isNaN(e.gamma)) return;
     lastGyro = performance.now();
     gyroLean = clamp(e.gamma / 28, -1, 1);
   }
-
   function desiredLean() {
     if (keyLeft !== keyRight) return keyLeft ? -1 : 1;
     if (touchActive) return pointerLean;
@@ -500,17 +543,13 @@
     if (gyroFresh()) return gyroLean;
     return 0;
   }
-
   function requestOrient() {
     var D = window.DeviceOrientationEvent;
     if (D && typeof D.requestPermission === "function") {
-      return D.requestPermission().then(function (res) {
-        return res === "granted";
-      }).catch(function () { return false; });
+      return D.requestPermission().then(function (res) { return res === "granted"; }).catch(function () { return false; });
     }
     return Promise.resolve(true);
   }
-
   function hookOrient() {
     if (orientHooked) return;
     orientHooked = true;
@@ -521,8 +560,11 @@
     st.mode = "play";
     st.segment = segment;
     st.segT = 0;
-    st.grace = 0;
-    st.failKind = "";
+    st.phase = "";
+    st.phaseT = 0;
+    st.branch = null;
+    st.branchN = 0;
+    st.failKind = "drop";
     st.fade = 0;
     st.fallT = 0;
     st.bobI = 0;
@@ -531,47 +573,86 @@
     st.leanTarget = 0;
     st.freezeLean = 0;
     st.freezeBob = 0;
-    st.seg1Intro = false;
-    st.walkerFade = segment === 0 ? 1 : 0;
+    st.hPair = null;
     if (segment === 0) {
       st.travel = 0;
       initWorld();
     }
-    snapBall();
+    seedOff();
+    placeOnCrown(activePose());
+    st.ballReady = true;
     syncUI();
-  }
-
-  function startSegment1() {
-    st.segment = 1;
-    st.segT = 0;
-    st.grace = 0;
-    st.seg1Intro = true;
-    st.freezeLean = st.lean;
-    st.freezeBob = BOB[st.bobI];
-    st.walkerFade = 1;
-    st.bobI = 0;
-    st.bobAcc = 0;
-    st.ball.vx = 0;
-    st.ball.vy = 0;
-    var c = contactPoint();
-    st.ball.x = c.x;
-    st.ball.y = c.y;
   }
 
   function onStartPressed() {
     if (loaded < 3 || orientStarted) return;
     orientStarted = true;
     var pending;
-    try {
-      pending = requestOrient();
-    } catch (err) {
-      pending = Promise.resolve(false);
-    }
+    try { pending = requestOrient(); }
+    catch (err) { pending = Promise.resolve(false); }
     pending.then(function (ok) {
       if (ok) hookOrient();
       beginRound(0);
     });
   }
+
+  function startHandoff() {
+    st.mode = "handoff";
+    st.phase = "arrange";
+    st.phaseT = 0;
+    st.branch = null;
+    st.off0 = st.off;
+    st.hWalk0 = plain(playPose("walk", st.lean, BOB[st.bobI]));
+    st.hVic0 = plain(farVic());
+    st.hPair = stagedPair();
+  }
+
+  function handoffActors() {
+    var pair = st.hPair;
+    if (!pair) return { walk: activePose(), vic: farVic() };
+    if (st.phase === "arrange") {
+      var k = smoothstep(clamp(st.phaseT / ARRANGE, 0, 1));
+      return { walk: lerpPlain(st.hWalk0, pair.walk, k), vic: lerpPlain(st.hVic0, pair.vic, k) };
+    }
+    if (st.phase === "arc") {
+      return { walk: actorPose("walk", pair.walk.feetX, pair.walk.feetY, pair.walk.boyH, 0), vic: actorPose("vic", pair.vic.feetX, pair.vic.feetY, pair.vic.boyH, 0) };
+    }
+    var u = smoothstep(clamp(st.phaseT / RETREAT, 0, 1));
+    var walkEnd = { kind: "walk", feetX: W * 0.5, feetY: horizonY() + H * 0.05, boyH: H * 0.048, lean: 0 };
+    var vicPlay = playPose("vic", 0, 0);
+    var vicEnd = { kind: "vic", feetX: vicPlay.feetX, feetY: vicPlay.feetY, boyH: vicPlay.boyH, lean: 0 };
+    return {
+      walk: lerpPlain(pair.walk, walkEnd, u),
+      vic: lerpPlain(pair.vic, vicEnd, u)
+    };
+  }
+
+  function arcPoint(t) {
+    var actors = handoffActors();
+    var g = ballGeom();
+    var y0 = actors.walk.crownY - g.r + g.r * 0.08;
+    var y1 = actors.vic.crownY - g.r + g.r * 0.08;
+    return {
+      x: lerp(actors.walk.crownX, actors.vic.crownX, t),
+      y: lerp(y0, y1, t) - Math.sin(Math.PI * t) * H * 0.15
+    };
+  }
+
+  function finishHandoff() {
+    st.mode = "play";
+    st.segment = 1;
+    st.segT = 0;
+    st.phase = "";
+    st.branch = null;
+    st.branchN = 0;
+    st.lean = 0;
+    st.leanTarget = 0;
+    st.bobI = 0;
+    st.bobAcc = 0;
+    seedOff();
+    placeOnCrown(playPose("vic", 0, 0));
+  }
+
 
   function roundRect(x, y, w, h, r) {
     var rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
@@ -639,7 +720,10 @@
       [42, -198, 32, 1],
       [-18, -250, 26, 2],
       [22, -246, 24, 2],
-      [0, -188, 28, 1]
+      [0, -188, 28, 1],
+      [0, -156, 40, 1],
+      [-46, -142, 30, 2],
+      [48, -140, 28, 0]
     ];
     for (var i = 0; i < blobs.length; i++) {
       var b = blobs[i];
@@ -862,37 +946,31 @@
       drawTree(xT, yT, sc, skyT);
     }
 
-    var gu = Math.max(goalU(), 0.015);
-    var gy = hy + Math.pow(gu, 1.15) * (H * 0.84 - hy);
-    var gs = lerp(0.18, 2.15, gu) * (H / 800);
-    drawGoalTree(W * 0.5 + W * 0.02, gy, gs, skyT);
+    var gu = Math.max(goalU(), 0.02);
+    var gy = hy + Math.pow(gu, 1.02) * (H * 0.9 - hy);
+    var gs = lerp(0.16, 2.75, gu) * (H / 800);
+    drawGoalTree(W * 0.5 + (1 - gu) * W * 0.03, gy, gs, skyT);
   }
 
+
+
   function drawBoy(pose, alpha) {
-    if (!imgWalk.complete || !imgWalk.naturalWidth) return;
+    if (!imgWalk.complete || !imgWalk.naturalWidth || alpha <= 0) return;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(pose.feetX, pose.feetY);
     ctx.rotate(pose.angle);
-    var dx = -pose.pivotX * pose.boyW;
-    var dy = -pose.pivotY * pose.boyH;
-    ctx.drawImage(imgWalk, dx, dy, pose.boyW, pose.boyH);
+    ctx.drawImage(imgWalk, -pose.pivotX * pose.boyW, -pose.pivotY * pose.boyH, pose.boyW, pose.boyH);
     ctx.restore();
   }
 
   function drawVic(pose, alpha) {
-    if (!imgWin.complete || !imgWin.naturalWidth) return;
+    if (!imgWin.complete || !imgWin.naturalWidth || alpha <= 0) return;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(pose.feetX, pose.feetY);
     ctx.rotate(pose.angle);
-    ctx.drawImage(
-      imgWin,
-      -pose.pivotX * pose.boyW,
-      -pose.pivotY * pose.boyH,
-      pose.boyW,
-      pose.boyH
-    );
+    ctx.drawImage(imgWin, -pose.pivotX * pose.boyW, -pose.pivotY * pose.boyH, pose.boyW, pose.boyH);
     ctx.restore();
   }
 
@@ -908,27 +986,38 @@
     ctx.restore();
   }
 
-  function drawShadow(feetX, feetY, boyW, S, alpha) {
+  function drawShadow(pose, alpha) {
+    if (!pose || alpha <= 0) return;
     ctx.save();
     ctx.globalAlpha = 0.22 * alpha;
     ctx.fillStyle = "#000";
     ctx.beginPath();
-    ctx.ellipse(feetX, feetY + 8, boyW * 0.28, 9 * S, 0, 0, Math.PI * 2);
+    ctx.ellipse(pose.feetX, pose.feetY + 8, pose.boyW * 0.28, 9 * pose.S, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
-  function failBall(kind) {
-    var c = contactPoint();
-    var dir = st.ball.x - c.x;
-    if (Math.abs(dir) < 1) dir = st.lean || 1;
-    st.ball.vx += Math.sign(dir) * 80;
-    st.ball.vy = Math.min(st.ball.vy, 0) - 40;
-    st.freezeLean = st.lean;
-    st.freezeBob = BOB[st.bobI] * (st.segment === 0 ? 1 : 0.5);
-    st.failKind = kind;
-    st.mode = "fall";
-    st.fallT = 0;
+  function drawBranch(b) {
+    var x = branchX(b);
+    var y = b.y;
+    var len = b.len;
+    var thick = Math.max(7, H * 0.011);
+    ctx.save();
+    ctx.fillStyle = "#7a4e2a";
+    roundRect(x - len / 2, y - thick / 2, len, thick, thick);
+    ctx.fill();
+    ctx.fillStyle = "#5f9a38";
+    var spots = [-0.34, -0.08, 0.18, 0.38];
+    for (var i = 0; i < spots.length; i++) {
+      var lx = x + spots[i] * len;
+      ctx.beginPath();
+      ctx.ellipse(lx, y - thick * 1.3, 14 * (H / 800), 9 * (H / 800), -0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(lx + 7 * (H / 800), y + thick * 0.4, 11 * (H / 800), 7 * (H / 800), 0.7, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function advanceWorld(dt, rate) {
@@ -944,79 +1033,85 @@
     }
   }
 
-  function springBall(dt, tune, c) {
-    var G = 1700 * tune.g.S;
-    var targetX = c.x + st.lean * (0.35 * tune.failR);
-    var targetY = c.y - G / tune.kY;
-    var ax = tune.kX * (targetX - st.ball.x) - tune.dX * st.ball.vx;
-    var ay = G + (tune.kY * (targetY - st.ball.y) - tune.dY * st.ball.vy);
-    st.ball.vx += ax * dt;
-    st.ball.vy += ay * dt;
-    st.ball.x += st.ball.vx * dt;
-    st.ball.y += st.ball.vy * dt;
-    st.ball.rot += st.ball.vx * dt * 0.012;
+  function stepPlay(dt) {
+    if (st.mode !== "play") return;
+    advanceWorld(dt, 0.32);
+    st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 9));
+    updateBranch(dt);
+    if (st.mode !== "play") return;
+    var pose = activePose();
+    stepCrown(dt, pose, true);
+    if (st.mode !== "play" || !st.onCrown) return;
+    st.segT += dt;
+    if (st.segment === 0 && st.segT >= SEG) {
+      st.segT = SEG;
+      startHandoff();
+      return;
+    }
+    if (st.segment === 1 && st.segT >= SEG && goalU() >= 1) {
+      st.segT = SEG;
+      st.off = 0;
+      st.bvx = 0;
+      st.onCrown = true;
+      st.branch = null;
+      st.mode = "win";
+      st.fade = 0;
+      placeOnCrown(playPose("vic", st.lean, 0));
+    }
   }
 
-  function stepPlay(dt, demo) {
-    if (!demo && st.mode === "play") advanceWorld(dt, 0.32);
-    else if (demo) advanceWorld(dt, 0.12);
-
+  function stepTitle(dt) {
+    advanceWorld(dt, 0.12);
     st.lean += (st.leanTarget - st.lean) * (1 - Math.exp(-dt * 9));
-    var tune = segTune();
-    var c = contactPoint();
+    stepCrown(dt, playPose("walk", st.lean, BOB[st.bobI]), false);
+  }
 
-    if (!demo && st.segment === 1 && st.seg1Intro) {
-      st.ball.x = c.x;
-      st.ball.y = c.y;
-      st.ball.vx = 0;
-      st.ball.vy = 0;
-      st.grace = 0;
-    } else {
-      springBall(dt, tune, c);
+  function stepHandoff(dt) {
+    if (st.mode !== "handoff") return;
+    st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 8));
+    st.phaseT += dt;
+    var actors = handoffActors();
+    if (st.phase === "arrange") {
+      var k = clamp(st.phaseT / ARRANGE, 0, 1);
+      st.off = st.off0 * (1 - k);
+      st.bvx = 0;
+      st.onCrown = true;
+      placeOnCrown(actors.walk);
+      if (st.phaseT >= ARRANGE) {
+        st.phase = "arc";
+        st.phaseT = 0;
+        st.off = 0;
+      }
+      return;
     }
-
-    if (!demo && st.mode === "play") {
-      if (!(st.segment === 1 && st.seg1Intro)) {
-        var dist = Math.hypot(st.ball.x - c.x, st.ball.y - c.y);
-        if (dist > tune.failR) {
-          st.grace += dt;
-          if (st.grace >= tune.grace) {
-            failBall("drop");
-            return;
-          }
-        } else {
-          st.grace = 0;
-        }
+    if (st.phase === "arc") {
+      var t = clamp(st.phaseT / ARC, 0, 1);
+      var p = arcPoint(t);
+      st.ball.x = p.x;
+      st.ball.y = p.y;
+      st.ball.rot += dt * 2.4;
+      st.onCrown = false;
+      if (st.phaseT >= ARC) {
+        st.phase = "retreat";
+        st.phaseT = 0;
+        st.off = 0;
+        st.bvx = 0;
+        st.onCrown = true;
       }
-
-      st.segT += dt;
-      if (st.segment === 1 && st.seg1Intro && st.segT >= INTRO) st.seg1Intro = false;
-
-      if (st.segment === 0 && st.segT >= SEG) {
-        st.segT = SEG;
-        var hand = meetingVic();
-        var catchR = tune.failR;
-        var cd = Math.hypot(st.ball.x - hand.handX, st.ball.y - hand.handY);
-        if (cd <= catchR) startSegment1();
-        else failBall("miss");
-        return;
-      }
-      if (st.segment === 1 && st.segT >= SEG) {
-        st.segT = SEG;
-        st.mode = "win";
-        st.fade = 0;
-        st.bobI = 0;
-        st.bobAcc = 0;
-        st.seg1Intro = false;
-      }
+      return;
     }
+    st.off = 0;
+    st.bvx = 0;
+    st.onCrown = true;
+    placeOnCrown(actors.vic);
+    if (st.phaseT >= RETREAT) finishHandoff();
   }
 
   function stepFall(dt) {
     var S = H / 800;
     var G = 1700 * S;
     st.fallT += dt;
-    st.ball.vy += G * 1.15 * dt;
+    st.ball.vy += G * dt;
     st.ball.vx *= Math.exp(-dt * 0.35);
     st.ball.x += st.ball.vx * dt;
     st.ball.y += st.ball.vy * dt;
@@ -1027,98 +1122,95 @@
       if (st.ball.vy > 0) st.ball.vy *= -0.38;
       st.ball.vx *= 0.82;
     }
+    if (st.branch) {
+      st.branch.t += dt;
+      if (st.branch.t >= SWEEP) st.branch = null;
+    }
     if (st.fallT > 0.95) st.mode = "fail";
-  }
-
-  function stepSettle(dt) {
-    st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 3));
-    var tune = segTune();
-    var c = contactPoint();
-    springBall(dt, tune, c);
   }
 
   function update(dt) {
     st.time += dt;
-    if (!st.ballReady && loaded === 3 && W > 2) snapBall();
+    if (!st.ballReady && loaded === 3 && W > 2) {
+      seedOff();
+      placeOnCrown(activePose());
+      st.ballReady = true;
+    }
     if (loaded < 3 || !st.ballReady) return;
 
-    if (st.segment === 1 && st.walkerFade > 0 && st.mode !== "title") {
-      st.walkerFade = Math.max(0, st.walkerFade - dt / 0.8);
-    }
-
+    var n = Math.max(1, Math.ceil(dt / (1 / 90)));
+    var h = dt / n;
     if (st.mode === "title") {
-      st.leanTarget = Math.sin(st.time * 0.85) * 0.32;
-      var steps = Math.max(1, Math.ceil(dt / (1 / 90)));
-      var hdt = dt / steps;
-      for (var i = 0; i < steps; i++) stepPlay(hdt, true);
+      var edge = crownEdge();
+      st.leanTarget = clamp((st.off / Math.max(1, edge)) * 1.15, -1, 1);
+      for (var i = 0; i < n; i++) stepTitle(h);
     } else if (st.mode === "play") {
       var d = desiredLean();
       if (Math.abs(d) < 0.045) d = 0;
       st.leanTarget = d;
-      var n = Math.max(1, Math.ceil(dt / (1 / 90)));
-      var sdt = dt / n;
       for (var j = 0; j < n; j++) {
         if (st.mode !== "play") break;
-        stepPlay(sdt, false);
+        stepPlay(h);
+      }
+    } else if (st.mode === "handoff") {
+      for (var a = 0; a < n; a++) {
+        if (st.mode !== "handoff") break;
+        stepHandoff(h);
       }
     } else if (st.mode === "fall") {
       stepFall(dt);
     } else if (st.mode === "win") {
-      st.fade = Math.min(1, st.fade + dt / 0.9);
-      var n2 = Math.max(1, Math.ceil(dt / (1 / 90)));
-      var wdt = dt / n2;
-      for (var k = 0; k < n2; k++) stepSettle(wdt);
+      st.fade = Math.min(1, st.fade + dt / 0.85);
+      st.lean += (0 - st.lean) * (1 - Math.exp(-dt * 3));
+      st.off = 0;
+      st.bvx = 0;
+      st.onCrown = true;
+      placeOnCrown(playPose("vic", st.lean, 0));
     }
   }
 
   function draw() {
     ctx.clearRect(0, 0, W, H);
-    var p = journey();
+    var p = st.mode === "win" ? 1 : journey();
+    drawBackground(p);
     var g = ballGeom();
-    drawBackground(st.mode === "win" ? 1 : p);
-
-    if (st.segment === 0 || st.mode === "title") {
-      var wp = walkerPose(st.lean, BOB[st.bobI]);
-      if (st.mode === "fall" || st.mode === "fail") wp = walkerPose(st.freezeLean, st.freezeBob);
-      drawShadow(wp.feetX, wp.feetY, wp.boyW, wp.S, 1);
-      drawBoy(wp, 1);
-      var far = approachedVic();
-      drawShadow(far.feetX, far.feetY, far.boyW, far.S, 0.9);
+    if (st.mode === "handoff") {
+      var actors = handoffActors();
+      var walkA = st.phase === "retreat" ? 1 - smoothstep(clamp(st.phaseT / RETREAT, 0, 1)) : 1;
+      drawShadow(actors.walk, walkA);
+      drawBoy(actors.walk, walkA);
+      drawShadow(actors.vic, 1);
+      drawVic(actors.vic, 1);
+    } else if (st.segment === 0 || st.mode === "title") {
+      var far = farVic();
+      drawShadow(far, 1);
       drawVic(far, 1);
+      var wp = activePose();
+      drawShadow(wp, 1);
+      drawBoy(wp, 1);
     } else {
-      if (st.walkerFade > 0.02) {
-        var left = walkerPose(st.freezeLean, st.freezeBob);
-        var recede = 1 - st.walkerFade;
-        ctx.save();
-        ctx.translate(0, -recede * 36 * left.S);
-        drawShadow(left.feetX, left.feetY, left.boyW, left.S, st.walkerFade);
-        drawBoy(left, st.walkerFade);
-        ctx.restore();
-      }
-      var vp = shownVic();
-      drawShadow(vp.feetX, vp.feetY, vp.boyW, vp.S, 1);
+      var vp = st.mode === "win" ? playPose("vic", st.lean, 0) : activePose();
+      drawShadow(vp, 1);
       drawVic(vp, 1);
     }
-
+    if (st.branch) drawBranch(st.branch);
     if (loaded === 3) drawBallSprite(st.ball.x, st.ball.y, st.ball.rot, g.bw, g.bh, 1);
   }
 
   function syncUI() {
     titleEl.classList.toggle("show", st.mode === "title");
     failEl.classList.toggle("show", st.mode === "fail");
-    winEl.classList.toggle("show", st.mode === "win" && st.fade > 0.42);
-    var playing = st.mode === "play" || st.mode === "fall" || st.mode === "win" || st.mode === "fail";
+    var under = st.mode === "win" && goalU() >= 1 && st.fade > 0.45;
+    winEl.classList.toggle("show", under);
+    var playing = st.mode === "play" || st.mode === "fall" || st.mode === "fail" || st.mode === "win" || st.mode === "handoff";
     hud.classList.toggle("show", playing);
-    var p = journey();
-    knob.style.left = (p * 100) + "%";
+    knob.style.left = (journey() * 100) + "%";
     var hint = "";
-    if (st.mode === "play" && st.segment === 0 && st.segT > SEG - 4) hint = "准备交给他";
+    if (st.mode === "play" && st.segment === 0 && st.segT > SEG - 4) hint = "准备顶给他";
     else if (st.mode === "play" && st.segment === 1 && st.segT > SEG - 4.5) hint = "快到树下了，稳住";
     urge.textContent = hint;
     urge.classList.toggle("show", hint !== "");
-    if (st.mode === "fail" || st.mode === "fall") {
-      failText.textContent = st.failKind === "miss" ? "没接住" : "球掉了";
-    }
+    if (st.mode === "fail" || st.mode === "fall") failText.textContent = "球掉了";
   }
 
   var last = 0;
@@ -1191,7 +1283,9 @@
       btnStart.textContent = "开始";
       initWorld();
       resize();
-      snapBall();
+      seedOff();
+      placeOnCrown(activePose());
+      st.ballReady = true;
     }
   }
   imgWalk.onload = markLoaded;
@@ -1206,6 +1300,7 @@
   initWorld();
   requestAnimationFrame(frame);
 })();
+
 </script>
 </body>
 </html>
