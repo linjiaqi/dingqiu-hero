@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>蓝衣射击</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #7ec8e3;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    touch-action: none;
+  }
+  #sheet {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(18, 36, 52, 0.46);
+  }
+  #sheet.open { display: flex; }
+  .card {
+    background: #fffdf8;
+    border-radius: 20px;
+    padding: 28px 36px 24px;
+    text-align: center;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+    min-width: 220px;
+  }
+  .card h2 {
+    margin: 0 0 18px;
+    font-size: 32px;
+    color: #1d3557;
+    letter-spacing: 2px;
+  }
+  #again {
+    appearance: none;
+    border: 0;
+    background: #1d9bf0;
+    color: white;
+    font-size: 20px;
+    padding: 12px 28px;
+    border-radius: 999px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  #again:active { transform: scale(0.98); }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="sheet">
+  <div class="card">
+    <h2 id="sheet-title">过关</h2>
+    <button id="again" type="button">再玩一次</button>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var sheet = document.getElementById("sheet");
+  var sheetTitle = document.getElementById("sheet-title");
+  var againBtn = document.getElementById("again");
+
+  // Idle frame 0 is 522×780. Fire frames are 522×900.
+  // Both have feet 15px above the canvas bottom. The extra 120px sits above the head.
+  // Anchor x=181 is the feet center, so the body does not jump when the fire sprite is drawn.
+  var SRC_W = 522;
+  var IDLE_H = 780;
+  var FIRE_H = 900;
+  var FOOT_INSET = 15;
+  var ANCHOR_X = 181;
+  var MUZZLE_X = 62;
+  var MUZZLE_Y = 78;
+  var FIRE_ENDS = [0.10, 0.17, 0.25, 0.40];
+  var SHOT_INTERVAL = 0.35;
+
+  var WAVES = [
+    { interval: 1.2, list: ["n", "n", "n", "n", "n", "n"] },
+    { interval: 1.05, list: ["n", "n", "n", "n", "n", "n", "n", "n"] },
+    { interval: 0.95, list: ["n", "n", "n", "n", "n", "n", "n", "n", "n"] },
+    { interval: 0.8, list: ["n", "n", "f", "n", "f", "n", "f", "n", "f", "n"] },
+    { interval: 0.7, list: ["f", "n", "f", "n", "f", "n", "f", "n", "f", "n", "f"] }
+  ];
+
+  var imgs = {};
+  var W = 0;
+  var H = 0;
+  var scale = 1;
+  var feetY = 0;
+  var groundH = 80;
+  var monW = 100;
+  var monH = 100;
+  var playerX = 0;
+  var playerRatio = 0.5;
+  var lives = 5;
+  var wave = 0;
+  var phase = "banner";
+  var phaseT = 0;
+  var spawnIndex = 0;
+  var spawnT = 0;
+  var monsters = [];
+  var bullets = [];
+  var shooting = false;
+  var shotCd = 0;
+  var fireT = -1;
+  var over = null;
+  var hurtT = 0;
+  var activePointer = null;
+  var ready = false;
+
+  function loadImage(src) {
+    return new Promise(function (resolve, reject) {
+      var img = new Image();
+      img.onload = function () { resolve(img); };
+      img.onerror = function () { reject(new Error(src)); };
+      img.src = src;
+    });
+  }
+
+  function layout() {
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.max(1, Math.round(W * dpr));
+    canvas.height = Math.max(1, Math.round(H * dpr));
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    groundH = Math.max(72, H * 0.12);
+    var idleDrawH = Math.min(H * 0.36, W * 0.78);
+    if (idleDrawH < 180) idleDrawH = Math.min(180, H * 0.42);
+    scale = idleDrawH / IDLE_H;
+    feetY = H - groundH + 8;
+    var muzzleOff = Math.abs(MUZZLE_X - ANCHOR_X) * scale;
+    monW = Math.max(92, Math.min(W * 0.26, muzzleOff * 2.55));
+    monH = monW * (580 / 563);
+    playerX = playerRatio * W;
+    if (playerX < 0) playerX = 0;
+    if (playerX > W) playerX = W;
+  }
+
+  function setPlayer(x) {
+    if (!(W > 0)) return;
+    if (x < 0) x = 0;
+    if (x > W) x = W;
+    playerX = x;
+    playerRatio = x / W;
+  }
+
+  function pointX(e) {
+    var rect = canvas.getBoundingClientRect();
+    return e.clientX - rect.left;
+  }
+
+  function sheetOpen() {
+    return sheet.classList.contains("open");
+  }
+
+  function startWave(index) {
+    wave = index;
+    phase = "banner";
+    phaseT = index === 0 ? 1.8 : 2.5;
+    spawnIndex = 0;
+    spawnT = 0;
+  }
+
+  function resetGame() {
+    lives = 5;
+    monsters = [];
+    bullets = [];
+    shooting = false;
+    shotCd = 0;
+    fireT = -1;
+    over = null;
+    hurtT = 0;
+    activePointer = null;
+    playerRatio = 0.5;
+    playerX = W * 0.5;
+    sheet.classList.remove("open");
+    startWave(0);
+  }
+
+  function endGame(kind) {
+    if (over) return;
+    over = kind;
+    shooting = false;
+    sheetTitle.textContent = kind === "win" ? "过关" : "被冲过来了";
+    sheet.classList.add("open");
+  }
+
+  function monsterRadius() {
+    return monW * 0.42;
+  }
+
+  function spawnMonster(kind) {
+    var r = monsterRadius();
+    var pad = Math.max(r * 0.85, 28);
+    var x = pad + Math.random() * Math.max(1, W - pad * 2);
+    var guard = 0;
+    while (guard < 8) {
+      var crowded = false;
+      for (var i = 0; i < monsters.length; i++) {
+        if (Math.abs(monsters[i].x - x) < monW * 0.62 && monsters[i].y < monH) {
+          crowded = true;
+          break;
+        }
+      }
+      if (!crowded) break;
+      x = pad + Math.random() * Math.max(1, W - pad * 2);
+      guard++;
+    }
+    var fast = kind === "f";
+    var speed = (H / 9) * (fast ? 1.6 : 1);
+    monsters.push({
+      kind: kind,
+      x: x,
+      y: -monH * 0.45,
+      hp: fast ? 2 : 3,
+      maxHp: fast ? 2 : 3,
+      speed: speed,
+      r: r,
+      flash: 0
+    });
+  }
+
+  function muzzle() {
+    return {
+      x: playerX + (MUZZLE_X - ANCHOR_X) * scale,
+      y: feetY - (FIRE_H - FOOT_INSET - MUZZLE_Y) * scale
+    };
+  }
+
+  function fire() {
+    var m = muzzle();
+    bullets.push({
+      x: m.x,
+      y: m.y,
+      vy: -(H / 0.55),
+      r: 7
+    });
+    fireT = 0;
+  }
+
+  function maybeAdvance() {
+    if (over) return;
+    if (phase !== "spawn") return;
+    if (spawnIndex < WAVES[wave].list.length) return;
+    if (monsters.length > 0) return;
+    if (wave >= WAVES.length - 1) endGame("win");
+    else startWave(wave + 1);
+  }
+
+  function update(dt) {
+    if (!ready || over) return;
+    hurtT = Math.max(0, hurtT - dt);
+
+    if (shooting) {
+      shotCd -= dt;
+      var fired = false;
+      while (shotCd <= 0) {
+        fire();
+        fired = true;
+        shotCd += SHOT_INTERVAL;
+      }
+      if (fired) {
+        /* animation restarts at frame 0 this frame */
+      } else if (fireT >= 0) {
+        fireT += dt;
+        if (fireT >= 0.4) fireT = -1;
+      }
+    } else {
+      shotCd = 0;
+      if (fireT >= 0) {
+        fireT += dt;
+        if (fireT >= 0.4) fireT = -1;
+      }
+    }
+
+    if (phase === "banner") {
+      phaseT -= dt;
+      if (phaseT <= 0) {
+        phase = "spawn";
+        spawnT = 0;
+      }
+    } else if (phase === "spawn") {
+      var spec = WAVES[wave];
+      spawnT -= dt;
+      while (spawnIndex < spec.list.length && spawnT <= 0) {
+        spawnMonster(spec.list[spawnIndex]);
+        spawnIndex++;
+        spawnT += spec.interval;
+      }
+    }
+
+    for (var j = monsters.length - 1; j >= 0; j--) {
+      var mon = monsters[j];
+      mon.y += mon.speed * dt;
+      mon.flash = Math.max(0, mon.flash - dt);
+      if (mon.y > H - monH * 0.08) {
+        monsters.splice(j, 1);
+        lives -= 1;
+        hurtT = 0.28;
+        if (lives <= 0) {
+          lives = 0;
+          endGame("lose");
+          return;
+        }
+      }
+    }
+
+    for (var i = bullets.length - 1; i >= 0; i--) {
+      var b = bullets[i];
+      b.y += b.vy * dt;
+      if (b.y < -40) {
+        bullets.splice(i, 1);
+        continue;
+      }
+      var hit = false;
+      for (var k = monsters.length - 1; k >= 0; k--) {
+        var m2 = monsters[k];
+        var dx = b.x - m2.x;
+        var dy = b.y - m2.y;
+        var reach = m2.r + b.r;
+        if (dx * dx + dy * dy <= reach * reach) {
+          m2.hp -= 1;
+          m2.flash = 0.1;
+          hit = true;
+          if (m2.hp <= 0) monsters.splice(k, 1);
+          break;
+        }
+      }
+      if (hit) bullets.splice(i, 1);
+    }
+
+    maybeAdvance();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawBackground() {
+    var sky = ctx.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, "#8fd3f0");
+    sky.addColorStop(1, "#d7f3c8");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    var clouds = [
+      [0.12, 0.16, 70],
+      [0.46, 0.22, 54],
+      [0.78, 0.14, 80]
+    ];
+    for (var i = 0; i < clouds.length; i++) {
+      var cx = clouds[i][0] * W;
+      var cy = clouds[i][1] * H;
+      var cw = clouds[i][2];
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, cw, cw * 0.42, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + cw * 0.55, cy + 6, cw * 0.72, cw * 0.36, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    var groundTop = H - groundH;
+    var g = ctx.createLinearGradient(0, groundTop, 0, H);
+    g.addColorStop(0, hurtT > 0 ? "#e07a5f" : "#8bc34a");
+    g.addColorStop(1, hurtT > 0 ? "#c44536" : "#5f8f2c");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, groundTop, W, groundH);
+    ctx.fillStyle = "rgba(255,255,255,0.28)";
+    ctx.fillRect(0, groundTop, W, 6);
+  }
+
+  function drawMonsters() {
+    for (var i = 0; i < monsters.length; i++) {
+      var m = monsters[i];
+      var img = m.kind === "f" ? imgs.fast : imgs.monster;
+      var bob = Math.sin(m.y * 0.05) * 2;
+      ctx.save();
+      if (m.flash > 0) ctx.filter = "brightness(1.8)";
+      ctx.drawImage(img, m.x - monW / 2, m.y - monH / 2 + bob, monW, monH);
+      ctx.restore();
+      var pipW = 8;
+      var gap = 4;
+      var total = m.maxHp * pipW + (m.maxHp - 1) * gap;
+      var px = m.x - total / 2;
+      var py = m.y - monH / 2 - 12 + bob;
+      for (var p = 0; p < m.maxHp; p++) {
+        ctx.fillStyle = p < m.hp ? "#e23d3d" : "rgba(255,255,255,0.7)";
+        ctx.beginPath();
+        ctx.arc(px + pipW / 2 + p * (pipW + gap), py, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawBullets() {
+    for (var i = 0; i < bullets.length; i++) {
+      var b = bullets[i];
+      ctx.fillStyle = "#ffe14a";
+      ctx.strokeStyle = "#8a6a10";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 225, 74, 0.85)";
+      ctx.fillRect(b.x - 2.5, b.y, 5, 16);
+    }
+  }
+
+  function fireFrameIndex() {
+    if (fireT < FIRE_ENDS[0]) return 0;
+    if (fireT < FIRE_ENDS[1]) return 1;
+    if (fireT < FIRE_ENDS[2]) return 2;
+    return 3;
+  }
+
+  function drawBoy() {
+    var left = playerX - ANCHOR_X * scale;
+    var img;
+    var srcH;
+    if (fireT >= 0) {
+      img = imgs["fire" + fireFrameIndex()];
+      srcH = FIRE_H;
+    } else {
+      img = imgs.idle;
+      srcH = IDLE_H;
+    }
+    var drawW = SRC_W * scale;
+    var drawH = srcH * scale;
+    var top = feetY - (srcH - FOOT_INSET) * scale;
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.beginPath();
+    ctx.ellipse(playerX, feetY + 4, 36 * (scale / 0.36), 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.drawImage(img, left, top, drawW, drawH);
+  }
+
+  function drawHud() {
+    ctx.fillStyle = "#16324f";
+    ctx.font = "700 22px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("蓝衣射击", 14, 12);
+
+    ctx.textAlign = "right";
+    ctx.font = "700 18px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillText("第" + (wave + 1) + "/5波", W - 14, 16);
+
+    var pipY = 46;
+    for (var i = 0; i < 5; i++) {
+      ctx.beginPath();
+      ctx.fillStyle = i < lives ? "#e23d3d" : "rgba(255,255,255,0.55)";
+      ctx.strokeStyle = "#16324f";
+      ctx.lineWidth = 2;
+      ctx.arc(22 + i * 18, pipY, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#16324f";
+    ctx.textAlign = "left";
+    ctx.font = "600 15px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillText("生命 " + lives + "/5", 112, pipY - 8);
+
+    ctx.textAlign = "center";
+    ctx.font = "600 15px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillStyle = "rgba(22,50,79,0.85)";
+    ctx.fillText("按住屏幕左右拖，按住就开枪", W / 2, H - 28);
+
+    if (phase === "banner" && !over) {
+      ctx.fillStyle = "rgba(255,253,248,0.92)";
+      var bw = 168;
+      var bh = 64;
+      roundRect(W / 2 - bw / 2, H * 0.34, bw, bh, 16);
+      ctx.fill();
+      ctx.fillStyle = "#1d3557";
+      ctx.font = "800 32px 'PingFang SC','Noto Sans SC',sans-serif";
+      ctx.textBaseline = "middle";
+      ctx.fillText("第" + (wave + 1) + "波", W / 2, H * 0.34 + bh / 2);
+      ctx.textBaseline = "top";
+    }
+  }
+
+  function draw() {
+    if (!ready) {
+      ctx.fillStyle = "#7ec8e3";
+      ctx.fillRect(0, 0, W, H);
+      return;
+    }
+    drawBackground();
+    drawMonsters();
+    drawBullets();
+    drawBoy();
+    drawHud();
+  }
+
+  function onDown(e) {
+    if (sheetOpen()) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    activePointer = e.pointerId;
+    shooting = true;
+    setPlayer(pointX(e));
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  }
+
+  function onMove(e) {
+    if (sheetOpen()) return;
+    if (e.pointerType === "mouse") {
+      setPlayer(pointX(e));
+      return;
+    }
+    if (activePointer !== null && e.pointerId === activePointer) {
+      setPlayer(pointX(e));
+    }
+  }
+
+  function onUp(e) {
+    if (activePointer !== null && e.pointerId !== activePointer) return;
+    activePointer = null;
+    shooting = false;
+  }
+
+  canvas.addEventListener("pointerdown", onDown);
+  window.addEventListener("pointermove", onMove);
+  window.addEventListener("pointerup", onUp);
+  window.addEventListener("pointercancel", onUp);
+  window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  window.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
+  window.addEventListener("resize", layout);
+
+  againBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    resetGame();
+  });
+
+  var last = 0;
+  function loop(now) {
+    if (!last) last = now;
+    var dt = (now - last) / 1000;
+    last = now;
+    if (dt > 0.05) dt = 0.05;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  Promise.all([
+    loadImage("boy_idle.png"),
+    loadImage("boy_fire_0.png"),
+    loadImage("boy_fire_1.png"),
+    loadImage("boy_fire_2.png"),
+    loadImage("boy_fire_3.png"),
+    loadImage("monster.png"),
+    loadImage("monster_fast.png")
+  ]).then(function (list) {
+    imgs.idle = list[0];
+    imgs.fire0 = list[1];
+    imgs.fire1 = list[2];
+    imgs.fire2 = list[3];
+    imgs.fire3 = list[4];
+    imgs.monster = list[5];
+    imgs.fast = list[6];
+    layout();
+    resetGame();
+    ready = true;
+    requestAnimationFrame(loop);
+  }).catch(function () {
+    layout();
+    ctx.fillStyle = "#16324f";
+    ctx.font = "18px sans-serif";
+    ctx.fillText("图片没有载入", 20, 40);
+  });
+})();
+</script>
+</body>
+</html>
