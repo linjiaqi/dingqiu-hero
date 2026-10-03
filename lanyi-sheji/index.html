@@ -146,7 +146,7 @@
     feetY = H - groundH + 8;
     var muzzleOff = Math.abs(MUZZLE_X - ANCHOR_X) * scale;
     monW = Math.max(92, Math.min(W * 0.26, muzzleOff * 2.55));
-    monH = monW * (580 / 563);
+    monH = monW * (382 / 380);
     playerX = playerRatio * W;
     if (playerX < 0) playerX = 0;
     if (playerX > W) playerX = W;
@@ -201,19 +201,22 @@
     sheet.classList.add("open");
   }
 
-  function monsterRadius() {
-    return monW * 0.42;
+  function monsterBox(kind) {
+    var w = monW;
+    var h = w * (kind === "f" ? (647 / 380) : (382 / 380));
+    return { w: w, h: h };
   }
 
   function spawnMonster(kind) {
-    var r = monsterRadius();
-    var pad = Math.max(r * 0.85, 28);
+    var box = monsterBox(kind);
+    var pad = box.w * 0.52;
     var x = pad + Math.random() * Math.max(1, W - pad * 2);
     var guard = 0;
     while (guard < 8) {
       var crowded = false;
       for (var i = 0; i < monsters.length; i++) {
-        if (Math.abs(monsters[i].x - x) < monW * 0.62 && monsters[i].y < monH) {
+        var other = monsterBox(monsters[i].kind);
+        if (Math.abs(monsters[i].x - x) < (box.w + other.w) * 0.55 && monsters[i].y < other.h) {
           crowded = true;
           break;
         }
@@ -227,13 +230,28 @@
     monsters.push({
       kind: kind,
       x: x,
-      y: -monH * 0.45,
+      y: -box.h * 0.45,
       hp: fast ? 2 : 3,
       maxHp: fast ? 2 : 3,
       speed: speed,
-      r: r,
       flash: 0
     });
+  }
+
+  function monsterHit(b, m) {
+    var box = monsterBox(m.kind);
+    var dx = b.x - m.x;
+    if (m.kind === "f") {
+      var top = m.y - box.h / 2;
+      var t = (b.y - top) / box.h;
+      if (t < -0.02 || t > 1.02) return false;
+      var span = t < 0.34 ? 0.92 : 0.92 + (0.16 - 0.92) * ((t - 0.34) / 0.66);
+      return Math.abs(dx) <= box.w * span * 0.5 + b.r * 0.45;
+    }
+    var dy = b.y - m.y;
+    var rx = box.w * 0.46 + b.r * 0.45;
+    var ry = box.h * 0.46 + b.r * 0.45;
+    return (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1;
   }
 
   function muzzle() {
@@ -309,7 +327,8 @@
       var mon = monsters[j];
       mon.y += mon.speed * dt;
       mon.flash = Math.max(0, mon.flash - dt);
-      if (mon.y > H - monH * 0.08) {
+      var fallBox = monsterBox(mon.kind);
+      if (mon.y > H - fallBox.h * 0.08) {
         monsters.splice(j, 1);
         lives -= 1;
         hurtT = 0.28;
@@ -331,10 +350,7 @@
       var hit = false;
       for (var k = monsters.length - 1; k >= 0; k--) {
         var m2 = monsters[k];
-        var dx = b.x - m2.x;
-        var dy = b.y - m2.y;
-        var reach = m2.r + b.r;
-        if (dx * dx + dy * dy <= reach * reach) {
+        if (monsterHit(b, m2)) {
           m2.hp -= 1;
           m2.flash = 0.1;
           hit = true;
@@ -394,17 +410,18 @@
   function drawMonsters() {
     for (var i = 0; i < monsters.length; i++) {
       var m = monsters[i];
-      var img = m.kind === "f" ? imgs.fast : imgs.monster;
+      var img = m.kind === "f" ? imgs.fast : imgs.enemy;
+      var box = monsterBox(m.kind);
       var bob = Math.sin(m.y * 0.05) * 2;
       ctx.save();
       if (m.flash > 0) ctx.filter = "brightness(1.8)";
-      ctx.drawImage(img, m.x - monW / 2, m.y - monH / 2 + bob, monW, monH);
+      ctx.drawImage(img, m.x - box.w / 2, m.y - box.h / 2 + bob, box.w, box.h);
       ctx.restore();
       var pipW = 8;
       var gap = 4;
       var total = m.maxHp * pipW + (m.maxHp - 1) * gap;
       var px = m.x - total / 2;
-      var py = m.y - monH / 2 - 12 + bob;
+      var py = m.y - box.h / 2 - 12 + bob;
       for (var p = 0; p < m.maxHp; p++) {
         ctx.fillStyle = p < m.hp ? "#e23d3d" : "rgba(255,255,255,0.7)";
         ctx.beginPath();
@@ -572,15 +589,15 @@
     loadImage("boy_fire_1.png"),
     loadImage("boy_fire_2.png"),
     loadImage("boy_fire_3.png"),
-    loadImage("monster.png"),
-    loadImage("monster_fast.png")
+    loadImage("shooter_enemy.png"),
+    loadImage("shooter_enemy_fast.png")
   ]).then(function (list) {
     imgs.idle = list[0];
     imgs.fire0 = list[1];
     imgs.fire1 = list[2];
     imgs.fire2 = list[3];
     imgs.fire3 = list[4];
-    imgs.monster = list[5];
+    imgs.enemy = list[5];
     imgs.fast = list[6];
     layout();
     resetGame();
