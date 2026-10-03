@@ -123,7 +123,12 @@
   var animTime = 0;
   var over = null;
   var hurtT = 0;
-  var activePointer = null;
+  var movePointer = null;
+  var moveLastY = 0;
+  var shootPointer = null;
+  var mouseShoot = false;
+  var keyShoot = false;
+  var keys = { up: false, down: false };
   var ready = false;
 
   function loadImage(src) {
@@ -161,8 +166,8 @@
     }
 
     marginY = Math.max(12, boardH * 0.045);
-    monW = Math.min(boardW * 0.20, boardH * 0.92);
-    if (monW < 72) monW = Math.min(72, boardW * 0.34);
+    // Enemy width is about 11% of the board, not the old ~20%.
+    monW = boardW * 0.11;
     playerY = clampY(playerRatio * boardH);
   }
 
@@ -208,7 +213,12 @@
     animTime = 0;
     over = null;
     hurtT = 0;
-    activePointer = null;
+    movePointer = null;
+    shootPointer = null;
+    mouseShoot = false;
+    keyShoot = false;
+    keys.up = false;
+    keys.down = false;
     playerRatio = 0.5;
     playerY = clampY(boardH * 0.5);
     sheet.classList.remove("open");
@@ -223,9 +233,32 @@
     sheet.classList.add("open");
   }
 
+  function isPortrait() {
+    return viewH > viewW;
+  }
+
+  // Display height is 32% of the board (was min(boardH * 0.78, boardW * 0.52)).
   function boyScale() {
-    var h = Math.min(boardH * 0.78, boardW * 0.52);
-    return h / SRC_H;
+    return (boardH * 0.32) / SRC_H;
+  }
+
+  // Previous height, only so the feet stay on the old foot line.
+  function legacyBoyHeight() {
+    return Math.min(boardH * 0.78, boardW * 0.52);
+  }
+
+  function boyPose() {
+    var sc = boyScale();
+    var oldSc = legacyBoyHeight() / SRC_H;
+    var foot = playerY + (SRC_H - MUZZLE_Y) * oldSc;
+    var top = foot - SRC_H * sc;
+    return {
+      sc: sc,
+      top: top,
+      foot: foot,
+      muzzleX: SPRITE_LEFT + MUZZLE_X * sc,
+      muzzleY: top + MUZZLE_Y * sc
+    };
   }
 
   function monsterBox(kind) {
@@ -300,10 +333,10 @@
   }
 
   function fire() {
-    var sc = boyScale();
+    var pose = boyPose();
     bullets.push({
-      x: SPRITE_LEFT + MUZZLE_X * sc,
-      y: playerY,
+      x: pose.muzzleX,
+      y: pose.muzzleY,
       vx: boardW / 0.58,
       r: Math.max(5, boardH * 0.014)
     });
@@ -320,9 +353,12 @@
   }
 
   function update(dt) {
-    if (!ready || over) return;
+    if (!ready || over || isPortrait()) return;
     hurtT = Math.max(0, hurtT - dt);
     advanceAnim(dt);
+
+    var keyDir = (keys.down ? 1 : 0) - (keys.up ? 1 : 0);
+    if (keyDir) setPlayerY(playerY + keyDir * (boardH / 0.45) * dt);
 
     if (shooting) {
       shotCd -= dt;
@@ -481,10 +517,9 @@
   }
 
   function drawBoy() {
-    var sc = boyScale();
-    var top = playerY - MUZZLE_Y * sc;
+    var pose = boyPose();
     var img = animIndex < 0 ? imgs.idle : imgs.right[animIndex];
-    ctx.drawImage(img, SPRITE_LEFT, top, SRC_W * sc, SRC_H * sc);
+    ctx.drawImage(img, SPRITE_LEFT, pose.top, SRC_W * pose.sc, SRC_H * pose.sc);
   }
 
   function drawHud() {
@@ -518,7 +553,7 @@
     ctx.textAlign = "center";
     ctx.font = "600 " + Math.round(15 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
     ctx.fillStyle = "rgba(22,50,79,0.88)";
-    ctx.fillText("按住屏幕上下拖，按住就朝右开枪", boardW / 2, boardH - Math.round(26 * s));
+    ctx.fillText("左半屏上下拖，右半屏按住开枪", boardW / 2, boardH - Math.round(26 * s));
 
     if (phase === "banner" && !over) {
       ctx.fillStyle = "rgba(255,253,248,0.92)";
@@ -535,9 +570,24 @@
     }
   }
 
+  function drawRotatePrompt() {
+    ctx.fillStyle = "#102433";
+    ctx.fillRect(0, 0, viewW, viewH);
+    ctx.fillStyle = "#f4fbff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    var s = Math.min(viewW, viewH) / 320;
+    ctx.font = "700 " + Math.round(28 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillText("把手机横过来", viewW / 2, viewH / 2);
+  }
+
   function draw() {
     ctx.fillStyle = "#102433";
     ctx.fillRect(0, 0, viewW, viewH);
+    if (isPortrait()) {
+      drawRotatePrompt();
+      return;
+    }
     if (!ready) return;
     ctx.save();
     ctx.beginPath();
@@ -552,37 +602,90 @@
     ctx.restore();
   }
 
+  function pointX(e) {
+    var rect = canvas.getBoundingClientRect();
+    return e.clientX - rect.left - boardX;
+  }
+
+  function syncShooting() {
+    shooting = mouseShoot || keyShoot || shootPointer !== null;
+  }
+
   function onDown(e) {
-    if (sheetOpen()) return;
-    if (e.pointerType === "mouse" && e.button !== 0) return;
-    activePointer = e.pointerId;
-    shooting = true;
-    shotCd = 0;
-    setPlayerY(pointY(e));
+    if (sheetOpen() || isPortrait()) return;
+    if (e.pointerType === "mouse") {
+      if (e.button !== 0) return;
+      mouseShoot = true;
+      syncShooting();
+      return;
+    }
+    var x = pointX(e);
+    if (x < boardW / 2) {
+      if (movePointer !== null) return;
+      movePointer = e.pointerId;
+      moveLastY = pointY(e);
+    } else {
+      if (shootPointer !== null) return;
+      shootPointer = e.pointerId;
+      syncShooting();
+    }
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   }
 
   function onMove(e) {
-    if (sheetOpen()) return;
-    if (e.pointerType === "mouse") {
-      setPlayerY(pointY(e));
-      return;
-    }
-    if (activePointer !== null && e.pointerId === activePointer) {
-      setPlayerY(pointY(e));
+    if (sheetOpen() || isPortrait()) return;
+    if (e.pointerType === "mouse") return;
+    if (movePointer !== null && e.pointerId === movePointer) {
+      var y = pointY(e);
+      setPlayerY(playerY + (y - moveLastY));
+      moveLastY = y;
     }
   }
 
   function onUp(e) {
-    if (activePointer !== null && e.pointerId !== activePointer) return;
-    activePointer = null;
-    shooting = false;
+    if (e.pointerType === "mouse") {
+      if (e.button !== 0) return;
+      mouseShoot = false;
+      syncShooting();
+      return;
+    }
+    if (movePointer !== null && e.pointerId === movePointer) movePointer = null;
+    if (shootPointer !== null && e.pointerId === shootPointer) {
+      shootPointer = null;
+      syncShooting();
+    }
+  }
+
+  function onKeyDown(e) {
+    if (sheetOpen() || isPortrait()) return;
+    if (e.code === "ArrowUp" || e.code === "KeyW") {
+      keys.up = true;
+      e.preventDefault();
+    } else if (e.code === "ArrowDown" || e.code === "KeyS") {
+      keys.down = true;
+      e.preventDefault();
+    } else if (e.code === "Space") {
+      if (!keyShoot) keyShoot = true;
+      syncShooting();
+      e.preventDefault();
+    }
+  }
+
+  function onKeyUp(e) {
+    if (e.code === "ArrowUp" || e.code === "KeyW") keys.up = false;
+    else if (e.code === "ArrowDown" || e.code === "KeyS") keys.down = false;
+    else if (e.code === "Space") {
+      keyShoot = false;
+      syncShooting();
+    }
   }
 
   canvas.addEventListener("pointerdown", onDown);
   window.addEventListener("pointermove", onMove);
   window.addEventListener("pointerup", onUp);
   window.addEventListener("pointercancel", onUp);
+  window.addEventListener("keydown", onKeyDown);
+  window.addEventListener("keyup", onKeyUp);
   window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   window.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
   window.addEventListener("resize", layout);
