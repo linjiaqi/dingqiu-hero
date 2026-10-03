@@ -9,7 +9,7 @@
     margin: 0;
     height: 100%;
     overflow: hidden;
-    background: #7ec8e3;
+    background: #102433;
     touch-action: none;
     user-select: none;
     -webkit-user-select: none;
@@ -76,18 +76,19 @@
   var sheetTitle = document.getElementById("sheet-title");
   var againBtn = document.getElementById("again");
 
-  // Idle frame 0 is 522×780. Fire frames are 522×900.
-  // Both have feet 15px above the canvas bottom. The extra 120px sits above the head.
-  // Anchor x=181 is the feet center, so the body does not jump when the fire sprite is drawn.
+  // boy_shoot.gif is 7 frames, all 522×780.
+  // Frame 0 is idle (gun hanging). Frames 1–6 raise the gun and shoot right.
+  // Durations: 130, 130, 80, 80, 100, 180 ms.
+  // Muzzle of the raised gun sits near source (432, 260). That point tracks the finger.
   var SRC_W = 522;
-  var IDLE_H = 780;
-  var FIRE_H = 900;
-  var FOOT_INSET = 15;
-  var ANCHOR_X = 181;
-  var MUZZLE_X = 62;
-  var MUZZLE_Y = 78;
-  var FIRE_ENDS = [0.10, 0.17, 0.25, 0.40];
+  var SRC_H = 780;
+  var MUZZLE_X = 432;
+  var MUZZLE_Y = 260;
+  var SPRITE_LEFT = 6;
+  var SHOOT_DURS = [0.13, 0.13, 0.08, 0.08, 0.10, 0.18];
   var SHOT_INTERVAL = 0.35;
+  var NORMAL_ASPECT = 178 / 384;
+  var FAST_ASPECT = 110 / 384;
 
   var WAVES = [
     { interval: 1.2, list: ["n", "n", "n", "n", "n", "n"] },
@@ -97,15 +98,16 @@
     { interval: 0.7, list: ["f", "n", "f", "n", "f", "n", "f", "n", "f", "n", "f"] }
   ];
 
-  var imgs = {};
-  var W = 0;
-  var H = 0;
-  var scale = 1;
-  var feetY = 0;
-  var groundH = 80;
-  var monW = 100;
-  var monH = 100;
-  var playerX = 0;
+  var imgs = { right: [] };
+  var viewW = 0;
+  var viewH = 0;
+  var boardX = 0;
+  var boardY = 0;
+  var boardW = 0;
+  var boardH = 0;
+  var marginY = 16;
+  var monW = 120;
+  var playerY = 0;
   var playerRatio = 0.5;
   var lives = 5;
   var wave = 0;
@@ -117,7 +119,8 @@
   var bullets = [];
   var shooting = false;
   var shotCd = 0;
-  var fireT = -1;
+  var animIndex = -1;
+  var animTime = 0;
   var over = null;
   var hurtT = 0;
   var activePointer = null;
@@ -134,35 +137,53 @@
 
   function layout() {
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = window.innerWidth;
-    H = window.innerHeight;
-    canvas.width = Math.max(1, Math.round(W * dpr));
-    canvas.height = Math.max(1, Math.round(H * dpr));
+    viewW = window.innerWidth;
+    viewH = window.innerHeight;
+    canvas.width = Math.max(1, Math.round(viewW * dpr));
+    canvas.height = Math.max(1, Math.round(viewH * dpr));
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    groundH = Math.max(72, H * 0.12);
-    var idleDrawH = Math.min(H * 0.36, W * 0.78);
-    if (idleDrawH < 180) idleDrawH = Math.min(180, H * 0.42);
-    scale = idleDrawH / IDLE_H;
-    feetY = H - groundH + 8;
-    var muzzleOff = Math.abs(MUZZLE_X - ANCHOR_X) * scale;
-    monW = Math.max(92, Math.min(W * 0.26, muzzleOff * 2.55));
-    monH = monW * (382 / 380);
-    playerX = playerRatio * W;
-    if (playerX < 0) playerX = 0;
-    if (playerX > W) playerX = W;
+
+    if (viewW >= viewH) {
+      boardX = 0;
+      boardY = 0;
+      boardW = viewW;
+      boardH = viewH;
+    } else {
+      var aspect = 16 / 9;
+      boardW = viewW;
+      boardH = viewW / aspect;
+      if (boardH > viewH) {
+        boardH = viewH;
+        boardW = viewH * aspect;
+      }
+      boardX = (viewW - boardW) / 2;
+      boardY = (viewH - boardH) / 2;
+    }
+
+    marginY = Math.max(12, boardH * 0.045);
+    monW = Math.min(boardW * 0.20, boardH * 0.92);
+    if (monW < 72) monW = Math.min(72, boardW * 0.34);
+    playerY = clampY(playerRatio * boardH);
   }
 
-  function setPlayer(x) {
-    if (!(W > 0)) return;
-    if (x < 0) x = 0;
-    if (x > W) x = W;
-    playerX = x;
-    playerRatio = x / W;
+  function clampY(y) {
+    var lo = marginY;
+    var hi = boardH - marginY;
+    if (hi < lo) hi = lo;
+    if (y < lo) y = lo;
+    if (y > hi) y = hi;
+    return y;
   }
 
-  function pointX(e) {
+  function setPlayerY(y) {
+    if (!(boardH > 0)) return;
+    playerY = clampY(y);
+    playerRatio = boardH > 0 ? playerY / boardH : 0.5;
+  }
+
+  function pointY(e) {
     var rect = canvas.getBoundingClientRect();
-    return e.clientX - rect.left;
+    return e.clientY - rect.top - boardY;
   }
 
   function sheetOpen() {
@@ -183,12 +204,13 @@
     bullets = [];
     shooting = false;
     shotCd = 0;
-    fireT = -1;
+    animIndex = -1;
+    animTime = 0;
     over = null;
     hurtT = 0;
     activePointer = null;
     playerRatio = 0.5;
-    playerX = W * 0.5;
+    playerY = clampY(boardH * 0.5);
     sheet.classList.remove("open");
     startWave(0);
   }
@@ -201,39 +223,50 @@
     sheet.classList.add("open");
   }
 
+  function boyScale() {
+    var h = Math.min(boardH * 0.78, boardW * 0.52);
+    return h / SRC_H;
+  }
+
   function monsterBox(kind) {
     var w = monW;
-    var h = w * (kind === "f" ? (647 / 380) : (382 / 380));
+    var h = w * (kind === "f" ? FAST_ASPECT : NORMAL_ASPECT);
     return { w: w, h: h };
   }
 
   function spawnMonster(kind) {
     var box = monsterBox(kind);
-    var pad = box.w * 0.52;
-    var x = pad + Math.random() * Math.max(1, W - pad * 2);
+    var lo = marginY;
+    var hi = Math.max(lo, boardH - marginY);
+    function pick() {
+      return lo + Math.random() * Math.max(1, hi - lo);
+    }
+    var y = pick();
+    var x0 = boardW + box.w * 0.55;
     var guard = 0;
     while (guard < 8) {
       var crowded = false;
       for (var i = 0; i < monsters.length; i++) {
         var other = monsterBox(monsters[i].kind);
-        if (Math.abs(monsters[i].x - x) < (box.w + other.w) * 0.55 && monsters[i].y < other.h) {
+        var dy = Math.abs(monsters[i].y - y);
+        var dx = Math.abs(monsters[i].x - x0);
+        if (dy < (box.h + other.h) * 0.62 && dx < (box.w + other.w) * 0.55) {
           crowded = true;
           break;
         }
       }
       if (!crowded) break;
-      x = pad + Math.random() * Math.max(1, W - pad * 2);
+      y = pick();
       guard++;
     }
     var fast = kind === "f";
-    var speed = (H / 9) * (fast ? 1.6 : 1);
     monsters.push({
       kind: kind,
-      x: x,
-      y: -box.h * 0.45,
+      x: x0,
+      y: y,
       hp: fast ? 2 : 3,
       maxHp: fast ? 2 : 3,
-      speed: speed,
+      speed: (boardW / 9) * (fast ? 1.6 : 1),
       flash: 0
     });
   }
@@ -241,35 +274,40 @@
   function monsterHit(b, m) {
     var box = monsterBox(m.kind);
     var dx = b.x - m.x;
-    if (m.kind === "f") {
-      var top = m.y - box.h / 2;
-      var t = (b.y - top) / box.h;
-      if (t < -0.02 || t > 1.02) return false;
-      var span = t < 0.34 ? 0.92 : 0.92 + (0.16 - 0.92) * ((t - 0.34) / 0.66);
-      return Math.abs(dx) <= box.w * span * 0.5 + b.r * 0.45;
-    }
     var dy = b.y - m.y;
-    var rx = box.w * 0.46 + b.r * 0.45;
-    var ry = box.h * 0.46 + b.r * 0.45;
+    var rx = box.w * 0.46 + b.r * 0.25;
+    var ry = box.h * (m.kind === "f" ? 0.36 : 0.40) + b.r * 0.25;
     return (dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) <= 1;
   }
 
-  function muzzle() {
-    return {
-      x: playerX + (MUZZLE_X - ANCHOR_X) * scale,
-      y: feetY - (FIRE_H - FOOT_INSET - MUZZLE_Y) * scale
-    };
+  function restartAnim() {
+    animIndex = 0;
+    animTime = 0;
+  }
+
+  function advanceAnim(dt) {
+    if (animIndex < 0) return;
+    animTime += dt;
+    while (animIndex >= 0 && animTime >= SHOOT_DURS[animIndex]) {
+      animTime -= SHOOT_DURS[animIndex];
+      animIndex += 1;
+      if (animIndex >= SHOOT_DURS.length) {
+        animIndex = -1;
+        animTime = 0;
+        break;
+      }
+    }
   }
 
   function fire() {
-    var m = muzzle();
+    var sc = boyScale();
     bullets.push({
-      x: m.x,
-      y: m.y,
-      vy: -(H / 0.55),
-      r: 7
+      x: SPRITE_LEFT + MUZZLE_X * sc,
+      y: playerY,
+      vx: boardW / 0.58,
+      r: Math.max(5, boardH * 0.014)
     });
-    fireT = 0;
+    restartAnim();
   }
 
   function maybeAdvance() {
@@ -284,27 +322,16 @@
   function update(dt) {
     if (!ready || over) return;
     hurtT = Math.max(0, hurtT - dt);
+    advanceAnim(dt);
 
     if (shooting) {
       shotCd -= dt;
-      var fired = false;
       while (shotCd <= 0) {
         fire();
-        fired = true;
         shotCd += SHOT_INTERVAL;
-      }
-      if (fired) {
-        /* animation restarts at frame 0 this frame */
-      } else if (fireT >= 0) {
-        fireT += dt;
-        if (fireT >= 0.4) fireT = -1;
       }
     } else {
       shotCd = 0;
-      if (fireT >= 0) {
-        fireT += dt;
-        if (fireT >= 0.4) fireT = -1;
-      }
     }
 
     if (phase === "banner") {
@@ -325,10 +352,10 @@
 
     for (var j = monsters.length - 1; j >= 0; j--) {
       var mon = monsters[j];
-      mon.y += mon.speed * dt;
+      mon.x -= mon.speed * dt;
       mon.flash = Math.max(0, mon.flash - dt);
-      var fallBox = monsterBox(mon.kind);
-      if (mon.y > H - fallBox.h * 0.08) {
+      var box = monsterBox(mon.kind);
+      if (mon.x - box.w / 2 <= 0) {
         monsters.splice(j, 1);
         lives -= 1;
         hurtT = 0.28;
@@ -342,8 +369,8 @@
 
     for (var i = bullets.length - 1; i >= 0; i--) {
       var b = bullets[i];
-      b.y += b.vy * dt;
-      if (b.y < -40) {
+      b.x += b.vx * dt;
+      if (b.x > boardW + 40) {
         bullets.splice(i, 1);
         continue;
       }
@@ -374,37 +401,44 @@
     ctx.closePath();
   }
 
+  function uiScale() {
+    var s = boardH / 420;
+    if (s < 0.7) s = 0.7;
+    if (s > 1.2) s = 1.2;
+    return s;
+  }
+
   function drawBackground() {
-    var sky = ctx.createLinearGradient(0, 0, 0, H);
+    var sky = ctx.createLinearGradient(0, 0, 0, boardH);
     sky.addColorStop(0, "#8fd3f0");
-    sky.addColorStop(1, "#d7f3c8");
+    sky.addColorStop(0.72, "#d7f3c8");
+    sky.addColorStop(1, "#b7e39a");
     ctx.fillStyle = sky;
-    ctx.fillRect(0, 0, W, H);
+    ctx.fillRect(0, 0, boardW, boardH);
 
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     var clouds = [
-      [0.12, 0.16, 70],
-      [0.46, 0.22, 54],
-      [0.78, 0.14, 80]
+      [0.22, 0.18, 0.12],
+      [0.55, 0.30, 0.09],
+      [0.82, 0.16, 0.13]
     ];
     for (var i = 0; i < clouds.length; i++) {
-      var cx = clouds[i][0] * W;
-      var cy = clouds[i][1] * H;
-      var cw = clouds[i][2];
+      var cx = clouds[i][0] * boardW;
+      var cy = clouds[i][1] * boardH;
+      var cw = clouds[i][2] * boardH;
       ctx.beginPath();
       ctx.ellipse(cx, cy, cw, cw * 0.42, 0, 0, Math.PI * 2);
-      ctx.ellipse(cx + cw * 0.55, cy + 6, cw * 0.72, cw * 0.36, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + cw * 0.55, cy + cw * 0.08, cw * 0.72, cw * 0.36, 0, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    var groundTop = H - groundH;
-    var g = ctx.createLinearGradient(0, groundTop, 0, H);
-    g.addColorStop(0, hurtT > 0 ? "#e07a5f" : "#8bc34a");
-    g.addColorStop(1, hurtT > 0 ? "#c44536" : "#5f8f2c");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, groundTop, W, groundH);
-    ctx.fillStyle = "rgba(255,255,255,0.28)";
-    ctx.fillRect(0, groundTop, W, 6);
+    if (hurtT > 0) {
+      var flash = ctx.createLinearGradient(0, 0, boardW * 0.28, 0);
+      flash.addColorStop(0, "rgba(226, 61, 61, 0.45)");
+      flash.addColorStop(1, "rgba(226, 61, 61, 0)");
+      ctx.fillStyle = flash;
+      ctx.fillRect(0, 0, boardW * 0.28, boardH);
+    }
   }
 
   function drawMonsters() {
@@ -412,20 +446,20 @@
       var m = monsters[i];
       var img = m.kind === "f" ? imgs.fast : imgs.enemy;
       var box = monsterBox(m.kind);
-      var bob = Math.sin(m.y * 0.05) * 2;
+      var bob = Math.sin(m.x * 0.04) * 1.5;
       ctx.save();
       if (m.flash > 0) ctx.filter = "brightness(1.8)";
       ctx.drawImage(img, m.x - box.w / 2, m.y - box.h / 2 + bob, box.w, box.h);
       ctx.restore();
-      var pipW = 8;
-      var gap = 4;
-      var total = m.maxHp * pipW + (m.maxHp - 1) * gap;
+      var pip = Math.max(4, box.h * 0.09);
+      var gap = pip * 0.7;
+      var total = m.maxHp * pip * 2 + (m.maxHp - 1) * gap;
       var px = m.x - total / 2;
-      var py = m.y - box.h / 2 - 12 + bob;
+      var py = m.y - box.h / 2 - pip - 4 + bob;
       for (var p = 0; p < m.maxHp; p++) {
-        ctx.fillStyle = p < m.hp ? "#e23d3d" : "rgba(255,255,255,0.7)";
         ctx.beginPath();
-        ctx.arc(px + pipW / 2 + p * (pipW + gap), py, 4, 0, Math.PI * 2);
+        ctx.fillStyle = p < m.hp ? "#e23d3d" : "rgba(255,255,255,0.7)";
+        ctx.arc(px + pip + p * (pip * 2 + gap), py, pip, 0, Math.PI * 2);
         ctx.fill();
       }
     }
@@ -434,6 +468,8 @@
   function drawBullets() {
     for (var i = 0; i < bullets.length; i++) {
       var b = bullets[i];
+      ctx.fillStyle = "rgba(255, 225, 74, 0.9)";
+      ctx.fillRect(b.x - b.r * 3.2, b.y - b.r * 0.38, b.r * 2.4, b.r * 0.76);
       ctx.fillStyle = "#ffe14a";
       ctx.strokeStyle = "#8a6a10";
       ctx.lineWidth = 2;
@@ -441,95 +477,79 @@
       ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = "rgba(255, 225, 74, 0.85)";
-      ctx.fillRect(b.x - 2.5, b.y, 5, 16);
     }
-  }
-
-  function fireFrameIndex() {
-    if (fireT < FIRE_ENDS[0]) return 0;
-    if (fireT < FIRE_ENDS[1]) return 1;
-    if (fireT < FIRE_ENDS[2]) return 2;
-    return 3;
   }
 
   function drawBoy() {
-    var left = playerX - ANCHOR_X * scale;
-    var img;
-    var srcH;
-    if (fireT >= 0) {
-      img = imgs["fire" + fireFrameIndex()];
-      srcH = FIRE_H;
-    } else {
-      img = imgs.idle;
-      srcH = IDLE_H;
-    }
-    var drawW = SRC_W * scale;
-    var drawH = srcH * scale;
-    var top = feetY - (srcH - FOOT_INSET) * scale;
-    ctx.fillStyle = "rgba(0,0,0,0.16)";
-    ctx.beginPath();
-    ctx.ellipse(playerX, feetY + 4, 36 * (scale / 0.36), 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.drawImage(img, left, top, drawW, drawH);
+    var sc = boyScale();
+    var top = playerY - MUZZLE_Y * sc;
+    var img = animIndex < 0 ? imgs.idle : imgs.right[animIndex];
+    ctx.drawImage(img, SPRITE_LEFT, top, SRC_W * sc, SRC_H * sc);
   }
 
   function drawHud() {
+    var s = uiScale();
     ctx.fillStyle = "#16324f";
-    ctx.font = "700 22px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.font = "700 " + Math.round(22 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText("蓝衣射击", 14, 12);
+    ctx.fillText("蓝衣射击", 14, 10);
 
     ctx.textAlign = "right";
-    ctx.font = "700 18px 'PingFang SC','Noto Sans SC',sans-serif";
-    ctx.fillText("第" + (wave + 1) + "/5波", W - 14, 16);
+    ctx.font = "700 " + Math.round(18 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillText("第" + (wave + 1) + "/5波", boardW - 14, 12);
 
-    var pipY = 46;
+    var pipY = 14 + Math.round(34 * s);
+    var pipR = Math.max(5, 7 * s);
     for (var i = 0; i < 5; i++) {
       ctx.beginPath();
       ctx.fillStyle = i < lives ? "#e23d3d" : "rgba(255,255,255,0.55)";
       ctx.strokeStyle = "#16324f";
       ctx.lineWidth = 2;
-      ctx.arc(22 + i * 18, pipY, 7, 0, Math.PI * 2);
+      ctx.arc(18 + i * (pipR * 2 + 4), pipY, pipR, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
     ctx.fillStyle = "#16324f";
     ctx.textAlign = "left";
-    ctx.font = "600 15px 'PingFang SC','Noto Sans SC',sans-serif";
-    ctx.fillText("生命 " + lives + "/5", 112, pipY - 8);
+    ctx.font = "600 " + Math.round(15 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillText("生命 " + lives + "/5", 18 + 5 * (pipR * 2 + 4) + 6, pipY - pipR);
 
     ctx.textAlign = "center";
-    ctx.font = "600 15px 'PingFang SC','Noto Sans SC',sans-serif";
-    ctx.fillStyle = "rgba(22,50,79,0.85)";
-    ctx.fillText("按住屏幕左右拖，按住就开枪", W / 2, H - 28);
+    ctx.font = "600 " + Math.round(15 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
+    ctx.fillStyle = "rgba(22,50,79,0.88)";
+    ctx.fillText("按住屏幕上下拖，按住就朝右开枪", boardW / 2, boardH - Math.round(26 * s));
 
     if (phase === "banner" && !over) {
       ctx.fillStyle = "rgba(255,253,248,0.92)";
-      var bw = 168;
-      var bh = 64;
-      roundRect(W / 2 - bw / 2, H * 0.34, bw, bh, 16);
+      var bw = Math.round(168 * s);
+      var bh = Math.round(64 * s);
+      var by = boardH * 0.36;
+      roundRect(boardW / 2 - bw / 2, by, bw, bh, 16);
       ctx.fill();
       ctx.fillStyle = "#1d3557";
-      ctx.font = "800 32px 'PingFang SC','Noto Sans SC',sans-serif";
+      ctx.font = "800 " + Math.round(32 * s) + "px 'PingFang SC','Noto Sans SC',sans-serif";
       ctx.textBaseline = "middle";
-      ctx.fillText("第" + (wave + 1) + "波", W / 2, H * 0.34 + bh / 2);
+      ctx.fillText("第" + (wave + 1) + "波", boardW / 2, by + bh / 2);
       ctx.textBaseline = "top";
     }
   }
 
   function draw() {
-    if (!ready) {
-      ctx.fillStyle = "#7ec8e3";
-      ctx.fillRect(0, 0, W, H);
-      return;
-    }
+    ctx.fillStyle = "#102433";
+    ctx.fillRect(0, 0, viewW, viewH);
+    if (!ready) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(boardX, boardY, boardW, boardH);
+    ctx.clip();
+    ctx.translate(boardX, boardY);
     drawBackground();
     drawMonsters();
     drawBullets();
     drawBoy();
     drawHud();
+    ctx.restore();
   }
 
   function onDown(e) {
@@ -537,18 +557,19 @@
     if (e.pointerType === "mouse" && e.button !== 0) return;
     activePointer = e.pointerId;
     shooting = true;
-    setPlayer(pointX(e));
+    shotCd = 0;
+    setPlayerY(pointY(e));
     try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   }
 
   function onMove(e) {
     if (sheetOpen()) return;
     if (e.pointerType === "mouse") {
-      setPlayer(pointX(e));
+      setPlayerY(pointY(e));
       return;
     }
     if (activePointer !== null && e.pointerId === activePointer) {
-      setPlayer(pointX(e));
+      setPlayerY(pointY(e));
     }
   }
 
@@ -585,27 +606,26 @@
 
   Promise.all([
     loadImage("boy_idle.png"),
-    loadImage("boy_fire_0.png"),
-    loadImage("boy_fire_1.png"),
-    loadImage("boy_fire_2.png"),
-    loadImage("boy_fire_3.png"),
+    loadImage("boy_right_1.png"),
+    loadImage("boy_right_2.png"),
+    loadImage("boy_right_3.png"),
+    loadImage("boy_right_4.png"),
+    loadImage("boy_right_5.png"),
+    loadImage("boy_right_6.png"),
     loadImage("shooter_enemy.png"),
     loadImage("shooter_enemy_fast.png")
   ]).then(function (list) {
     imgs.idle = list[0];
-    imgs.fire0 = list[1];
-    imgs.fire1 = list[2];
-    imgs.fire2 = list[3];
-    imgs.fire3 = list[4];
-    imgs.enemy = list[5];
-    imgs.fast = list[6];
+    imgs.right = [list[1], list[2], list[3], list[4], list[5], list[6]];
+    imgs.enemy = list[7];
+    imgs.fast = list[8];
     layout();
     resetGame();
     ready = true;
     requestAnimationFrame(loop);
   }).catch(function () {
     layout();
-    ctx.fillStyle = "#16324f";
+    ctx.fillStyle = "#f4fbff";
     ctx.font = "18px sans-serif";
     ctx.fillText("图片没有载入", 20, 40);
   });
