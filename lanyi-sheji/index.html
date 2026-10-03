@@ -79,11 +79,13 @@
   // boy_shoot.gif is 7 frames, all 522×780.
   // Frame 0 is idle (gun hanging). Frames 1–6 raise the gun and shoot right.
   // Durations: 130, 130, 80, 80, 100, 180 ms.
-  // Muzzle of the raised gun sits near source (432, 260). That point tracks the finger.
+  // Muzzle of the raised gun sits near source (432, 260).
+  // Opaque hair starts at source y 25; playerY is the muzzle's board Y.
   var SRC_W = 522;
   var SRC_H = 780;
   var MUZZLE_X = 432;
   var MUZZLE_Y = 260;
+  var HEAD_Y = 25;
   var SPRITE_LEFT = 6;
   var SHOOT_DURS = [0.13, 0.13, 0.08, 0.08, 0.10, 0.18];
   var SHOT_INTERVAL = 0.35;
@@ -105,7 +107,6 @@
   var boardY = 0;
   var boardW = 0;
   var boardH = 0;
-  var marginY = 16;
   var monW = 120;
   var playerY = 0;
   var playerRatio = 0.5;
@@ -165,15 +166,23 @@
       boardY = (viewH - boardH) / 2;
     }
 
-    marginY = Math.max(12, boardH * 0.045);
     // Enemy width is about 11% of the board, not the old ~20%.
     monW = boardW * 0.11;
     playerY = clampY(playerRatio * boardH);
   }
 
+  function headClearance() {
+    if (!(boardH > 0)) return 16;
+    var gap = boardH * 0.06;
+    if (gap < 16) gap = 16;
+    var cap = boardH * 0.08;
+    if (cap >= 16 && gap > cap) gap = cap;
+    return gap;
+  }
+
   function clampY(y) {
-    var lo = marginY;
-    var hi = boardH - marginY;
+    var lo = muzzleMin();
+    var hi = muzzleMax();
     if (hi < lo) hi = lo;
     if (y < lo) y = lo;
     if (y > hi) y = hi;
@@ -237,27 +246,51 @@
     return viewH > viewW;
   }
 
-  // Display height is 32% of the board (was min(boardH * 0.78, boardW * 0.52)).
-  function boyScale() {
-    return (boardH * 0.32) / SRC_H;
+  // Display height is 32% of the board. The whole sprite stays on the board.
+  function boyHeight() {
+    return boardH * 0.32;
   }
 
-  // Previous height, only so the feet stay on the old foot line.
-  function legacyBoyHeight() {
-    return Math.min(boardH * 0.78, boardW * 0.52);
+  function boyScale() {
+    return boyHeight() / SRC_H;
+  }
+
+  // Highest sprite top: visible gap above the hair is ~6% of the board (at least 16px).
+  function spriteTopMin() {
+    var desired = headClearance() - HEAD_Y * boyScale();
+    if (desired < 0) desired = 0;
+    var limit = boardH - boyHeight();
+    if (limit < 0) limit = 0;
+    if (desired > limit) desired = 0;
+    return desired;
+  }
+
+  function spriteTopMax() {
+    var limit = boardH - boyHeight();
+    if (limit < 0) limit = 0;
+    var minTop = spriteTopMin();
+    if (limit < minTop) limit = minTop;
+    return limit;
+  }
+
+  function muzzleMin() {
+    return spriteTopMin() + MUZZLE_Y * boyScale();
+  }
+
+  function muzzleMax() {
+    return spriteTopMax() + MUZZLE_Y * boyScale();
   }
 
   function boyPose() {
     var sc = boyScale();
-    var oldSc = legacyBoyHeight() / SRC_H;
-    var foot = playerY + (SRC_H - MUZZLE_Y) * oldSc;
-    var top = foot - SRC_H * sc;
+    var top = playerY - MUZZLE_Y * sc;
+    var foot = top + SRC_H * sc;
     return {
       sc: sc,
       top: top,
       foot: foot,
       muzzleX: SPRITE_LEFT + MUZZLE_X * sc,
-      muzzleY: top + MUZZLE_Y * sc
+      muzzleY: playerY
     };
   }
 
@@ -269,8 +302,8 @@
 
   function spawnMonster(kind) {
     var box = monsterBox(kind);
-    var lo = marginY;
-    var hi = Math.max(lo, boardH - marginY);
+    var lo = muzzleMin();
+    var hi = Math.max(lo, muzzleMax());
     function pick() {
       return lo + Math.random() * Math.max(1, hi - lo);
     }
