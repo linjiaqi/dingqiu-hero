@@ -1,0 +1,78 @@
+{
+ "walk": [
+  {
+   "file": "boy_walk_loop_0.png",
+   "ms": 120
+  },
+  {
+   "file": "boy_walk_loop_1.png",
+   "ms": 120
+  },
+  {
+   "file": "boy_walk_loop_2.png",
+   "ms": 120
+  },
+  {
+   "file": "boy_walk_loop_3.png",
+   "ms": 120
+  }
+ ],
+ "fall": [
+  {
+   "file": "boy_fall_0.png",
+   "ms": 90
+  },
+  {
+   "file": "boy_fall_1.png",
+   "ms": 90
+  },
+  {
+   "file": "boy_fall_2.png",
+   "ms": 90
+  },
+  {
+   "file": "boy_fall_3.png",
+   "ms": 1000
+  }
+ ],
+ "miss": [
+  {
+   "file": "boy_miss_0.png",
+   "ms": 100
+  },
+  {
+   "file": "boy_miss_1.png",
+   "ms": 120
+  },
+  {
+   "file": "boy_miss_2.png",
+   "ms": 140
+  },
+  {
+   "file": "boy_miss_3.png",
+   "ms": 1000
+  }
+ ],
+ "in_bin": [
+  {
+   "file": "boy_in_bin_0.png",
+   "ms": 110
+  },
+  {
+   "file": "boy_in_bin_1.png",
+   "ms": 110
+  },
+  {
+   "file": "boy_in_bin_2.png",
+   "ms": 110
+  },
+  {
+   "file": "boy_in_bin_3.png",
+   "ms": 110
+  },
+  {
+   "file": "boy_in_bin_4.png",
+   "ms": 1000
+  }
+ ]
+}
