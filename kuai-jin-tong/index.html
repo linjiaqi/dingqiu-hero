@@ -1,129 +1,499 @@
 <!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8">
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>快进桶</title>
 <style>
-html,body{margin:0;height:100%;background:#7ec8f0;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
+html,body{margin:0;height:100%;background:#87c8ef;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;font-family:system-ui,"PingFang SC","Microsoft YaHei",sans-serif}
 #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
-canvas{display:block;background:#bfe6ff}
-#over{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35)}
+canvas{display:block;background:#b7e3fb;touch-action:none}
+#over{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.38)}
 #sheet{background:#fff;border-radius:18px;padding:26px 34px;text-align:center}
-#sheet h2{margin:0 0 8px}#sheet p{font-size:22px;margin:8px 0 18px}
-#mute{position:fixed;z-index:5;width:34px;height:34px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.75);font-size:18px;line-height:34px;text-align:center;touch-action:manipulation}
+#sheet h2{margin:0 0 8px;font-size:28px}
+#sheet p{font-size:22px;margin:8px 0 18px}
 #again{font-size:20px;padding:10px 26px;border:0;border-radius:12px;background:#ff9f1c;color:#fff}
-</style></head><body>
+#mute{position:fixed;z-index:5;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.82);font-size:18px;line-height:36px;text-align:center}
+</style>
+</head>
+<body>
 <div id="wrap"><canvas id="c"></canvas></div>
-<button id="mute" aria-label="静音">🔊</button>
-<div id="over"><div id="sheet"><h2>结束啦</h2><p id="sc">得分 0</p><button id="again">再玩一次</button></div></div>
+<button id="mute" type="button" aria-label="静音">🔊</button>
+<div id="over"><div id="sheet"><h2>结束啦</h2><p id="sc">得分 0</p><button id="again" type="button">再玩一次</button></div></div>
 <script>
-const W=360,H=640,GROUND=580,BOY_Y=190,BOY_H=136,BOY_W=Math.round(136*305/866),RAIL_Y=BOY_Y+34;
-const WALK=140,FALL_HOP=-220,GRAV=1900,BIN_W=163,BIN_SPEED0=55,BIN_STEP=12,BIN_GAP=270,TRUCK_IN=420,TRUCK_DRAG=260;
-// bin.png 420x478: 实体底 y=472；桶口内沿 x≈85..335（宽≈250），桶沿 y≈65；把手原图在右侧 x≈362..402, y≈140..232，挂点(402,228)。桶镜像绘制，把手朝左对着车尾钩子。
-const SB=BIN_W/420,BIN_H=478*SB,BIN_TOP=GROUND-472*SB,RIM_Y=BIN_TOP+65*SB,MOUTH=250*SB,HANDLE_DX=-BIN_W/2+(420-402)*SB,HANDLE_Y=BIN_TOP+228*SB;
-// truck.png 760x389：车头朝左，实体底 y=383；黄钩钩口(706,276)。缩放使钩口高度=把手高度。
-const ST=(472-228)*SB/(383-276),TRUCK_H=389*ST,TRUCK_W=760*ST,TRUCK_TOP=GROUND-383*ST,HOOK_DX=706*ST;
-const LID_H=94*SB,LID_TOP=RIM_Y-LID_H;
-// 人物 GIF 画布 420x460，脚底 y=440；走路帧人物可见高约 401px → 换算成 136。
-const GF_W=420,GF_H=460,GF_FOOT=440,GF_S=BOY_H/401;
-// boy_in_bin 自带 0.62 倍桶（260 宽，图底 y=440）：按场上桶宽换算，使两桶完全重合。
-const IB_S=BIN_W/(420*0.62);
-const cv=document.getElementById('c'),cx=cv.getContext('2d');
-function fit(){const s=Math.min(innerWidth/W,innerHeight/H),d=devicePixelRatio||1;cv.style.width=W*s+'px';cv.style.height=H*s+'px';cv.width=W*d;cv.height=H*d;cx.setTransform(d,0,0,d,0,0);const m=document.getElementById('mute');if(m){const rc=cv.getBoundingClientRect();m.style.top=(rc.top+10*s)+'px';m.style.left=(rc.right-10*s-34)+'px';}}
-addEventListener('resize',fit);fit();
-const img={};['boy_stripe','bin','truck','bin_lid'].forEach(n=>{const i=new Image();i.onload=()=>img[n]=i;i.onerror=()=>{};i.src='./'+n+'.png';});
-const ANIM={walk:[],fall:[],miss:[],in_bin:[]};
-fetch('./frames.json',{cache:'no-cache'}).then(r=>r.ok?r.json():{}).then(d=>{Object.keys(ANIM).forEach(k=>{(Array.isArray(d&&d[k])?d[k]:[]).forEach((f,i)=>{if(!f||!f.file)return;const im=new Image(),o={img:null,ms:+f.ms>0?+f.ms:100};im.onload=()=>o.img=im;im.src='./'+f.file;ANIM[k][i]=o;});});}).catch(()=>{});
-function animOk(k){const a=ANIM[k];return a.length>0&&a.every(f=>f&&f.img);}
-function animDur(k){return animOk(k)?ANIM[k].reduce((t,f)=>t+f.ms,0)/1000:0;}
-function animFrame(k,t,loop){const a=ANIM[k];let ms=t*1000;const tot=animDur(k)*1000;if(loop)ms%=tot;else if(ms>=tot)return a[a.length-1].img;for(const f of a){if(ms<f.ms)return f.img;ms-=f.ms;}return a[a.length-1].img;}
-function inBinPlaying(n){const b=st.boy;return b.mode==='in'&&b.bin===n&&animOk('in_bin')&&b.t<=animDur('in_bin');}
-function modeAnim(m){return m==='walk'?'walk':m==='fall'?'fall':m==='bounce'?'miss':m==='in'?'in_bin':null;}
-const SND_KEY='kuaijintong_muted';let AC=null,MG=null,muted=false,eng=null;
-try{muted=localStorage.getItem(SND_KEY)==='1'}catch(e){}
-function unlock(){try{if(!AC){const C=window.AudioContext||window.webkitAudioContext;if(!C)return;AC=new C();MG=AC.createGain();MG.gain.value=muted?0:0.2;MG.connect(AC.destination);}if(AC.state==='suspended')AC.resume().catch(()=>{});}catch(e){AC=null}}
-function ok(){return AC&&MG&&AC.state==='running'}
-function env(g,t,a,d,v){g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(v,t+a);g.gain.linearRampToValueAtTime(0,t+d);}
-function tone(type,f0,f1,dur,v,delay){if(!ok())return;try{const t=AC.currentTime+(delay||0),o=AC.createOscillator(),g=AC.createGain();o.type=type;o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(f1,t+dur);env(g,t,0.008,dur,v);o.connect(g);g.connect(MG);o.start(t);o.stop(t+dur+0.02);}catch(e){}}
-function noise(dur,fq,v,delay,q){if(!ok())return;try{const t=AC.currentTime+(delay||0),n=Math.ceil(AC.sampleRate*dur),bf=AC.createBuffer(1,n,AC.sampleRate),d=bf.getChannelData(0);for(let i=0;i<n;i++)d[i]=Math.random()*2-1;const s=AC.createBufferSource(),f=AC.createBiquadFilter(),g=AC.createGain();s.buffer=bf;f.type='bandpass';f.frequency.value=fq;f.Q.value=q||1;env(g,t,0.004,dur,v);s.connect(f);f.connect(g);g.connect(MG);s.start(t);s.stop(t+dur+0.02);}catch(e){}}
-const SFX={
- whoosh(){tone('sine',300,900,0.22,0.5);noise(0.22,1800,0.35,0,0.8);},
- thud(){tone('sine',140,55,0.2,0.9);noise(0.08,300,0.3);},
- click(){noise(0.03,3500,0.6,0,2);tone('square',1800,1200,0.025,0.15);},
- horn(){tone('square',440,440,0.18,0.18);tone('square',554,554,0.18,0.14);tone('square',440,440,0.22,0.18,0.24);tone('square',554,554,0.22,0.14,0.24);},
- splat(){noise(0.09,900,0.7);tone('sine',180,90,0.08,0.4);tone('sine',260,420,0.09,0.3,0.2);},
- score(){tone('triangle',660,660,0.09,0.45);tone('triangle',990,990,0.14,0.45,0.08);},
- over(){tone('triangle',520,180,0.6,0.5);}
-};
-function engineOn(){if(eng||!ok())return;try{const o=AC.createOscillator(),l=AC.createOscillator(),lg=AC.createGain(),f=AC.createBiquadFilter(),g=AC.createGain(),t=AC.currentTime;o.type='sawtooth';o.frequency.value=55;l.frequency.value=7;lg.gain.value=0.25;f.type='lowpass';f.frequency.value=320;g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(0.35,t+0.08);const am=AC.createGain();am.gain.value=0.75;l.connect(lg);lg.connect(am.gain);o.connect(f);f.connect(am);am.connect(g);g.connect(MG);o.start();l.start();eng={o,l,g};}catch(e){eng=null}}
-function engineOff(){if(!eng)return;const e=eng;eng=null;try{const t=AC.currentTime;e.g.gain.cancelScheduledValues(t);e.g.gain.setValueAtTime(e.g.gain.value,t);e.g.gain.linearRampToValueAtTime(0,t+0.08);e.o.stop(t+0.1);e.l.stop(t+0.1);}catch(x){}}
-const muteBtn=document.getElementById('mute');
-function showMute(){muteBtn.textContent=muted?'🔇':'🔊';}showMute();
-function stopEv(e){e.stopPropagation();}
-['pointerdown','touchstart','mousedown'].forEach(n=>muteBtn.addEventListener(n,stopEv));
-muteBtn.addEventListener('click',e=>{e.stopPropagation();e.preventDefault();unlock();muted=!muted;try{localStorage.setItem(SND_KEY,muted?'1':'0')}catch(x){}if(MG)MG.gain.setTargetAtTime(muted?0:0.2,AC.currentTime,0.02);showMute();muteBtn.blur();});
-['pointerdown','keydown','touchstart'].forEach(n=>addEventListener(n,unlock,{capture:true,passive:true}));
-let st;
-function reset(){engineOff();st={kick:0,score:0,chances:3,boy:{x:W/2,y:BOY_Y,vy:0,dir:1,mode:'walk',t:0},bins:[],truck:null,over:false,hintT:4};spawnBin(W+60);document.getElementById('over').style.display='none';}
-function spawnBin(x){st.bins.push({x,lid:0,cap:false});}
-function speed(){return BIN_SPEED0+BIN_STEP*Math.floor(st.score/3);}
-function jump(){if(st.over)return;const b=st.boy;if(b.mode!=='walk')return;b.mode='fall';b.vy=FALL_HOP;b.vx=b.dir*25;b.t=0;st.kick=0.35;st.hintT=0;SFX.whoosh();}
-cv.addEventListener('pointerdown',e=>{e.preventDefault();jump();});
-addEventListener('keydown',e=>{if(e.code==='Space'){if(e.target===muteBtn){e.preventDefault();return;}e.preventDefault();if(!e.repeat)jump();}});
-document.getElementById('again').onclick=e=>{e.stopPropagation();reset();};
-function respawn(){const b=st.boy;st.cart=null;b.mode='walk';b.y=BOY_Y;b.vy=0;b.t=0;}
-function step(dt){
- const b=st.boy;st.hintT-=dt;st.kick=Math.max(0,st.kick-dt);if(b.mode!=='walk'&&b.mode!=='none'&&!st.cart)st.cart=b.x;if(b.mode==='walk')st.cart=null;
- if(!st.truck&&!st.over){const v=speed();st.bins.forEach(n=>n.x-=v*dt);st.bins=st.bins.filter(n=>n.x>-BIN_W);const last=st.bins[st.bins.length-1];if(!last||last.x<W+40-BIN_GAP-Math.random()*60)spawnBin(W+BIN_W);}
- if(b.mode==='walk'){b.t+=dt;b.x+=b.dir*WALK*dt;if(b.x>W-40){b.x=W-40;b.dir=-1}if(b.x<40){b.x=40;b.dir=1}}
- else if(b.mode==='fall'){const prev=b.y;b.t+=dt;b.x+=b.vx*dt;b.vy+=GRAV*dt;b.y+=b.vy*dt;const top=RIM_Y;
-  if(prev<top&&b.y>=top){const n=st.bins.find(n=>Math.abs(n.x-b.x)<=MOUTH/2-6);if(n){b.mode='in';b.bin=n;n.cap=true;b.t=0;SFX.thud();}}
-  if(b.mode==='fall'&&b.y>=GROUND){b.y=GROUND;b.vy=-300;b.mode='bounce';b.t=0;SFX.splat();}}
- else if(b.mode==='bounce'){b.vy+=GRAV*dt;b.y+=b.vy*dt;if(b.y>=GROUND){b.y=GROUND;b.vy=0}b.t+=dt;if(b.t>Math.max(0.8,animDur('miss'))){st.chances--;if(st.chances<=0){st.over=true;b.mode='none';engineOff();SFX.over();document.getElementById('sc').textContent='得分 '+st.score;document.getElementById('over').style.display='flex';}else respawn();}}
- else if(b.mode==='in'){const n=b.bin;b.t+=dt;b.y=Math.min(animOk('in_bin')?RIM_Y+BOY_H*0.6:GROUND-10,b.y+300*dt);b.x+=(n.x-b.x)*Math.min(1,dt*10);const ib=animOk('in_bin')?animDur('in_bin'):0.25;if(b.t>ib){if(n.lid===0&&(img.bin_lid||!img.bin))SFX.click();n.lid=Math.min(1,n.lid+dt*4);}
-  if((n.lid>=1||(img.bin&&!img.bin_lid&&b.t>ib+0.25))&&!st.truck){st.truck={x:W+20,phase:'in',bin:n};engineOn();SFX.horn();}}
- if(st.truck){const t=st.truck,n=t.bin,dock=n.x+HANDLE_DX-HOOK_DX;
-  if(t.phase==='in'){t.x-=TRUCK_IN*dt;if(t.x<=dock){t.x=dock;t.phase='hook';t.t=0}}
-  else if(t.phase==='hook'){t.t+=dt;if(t.t>0.35)t.phase='drag'}
-  else{t.x-=TRUCK_DRAG*dt;n.x=t.x+HOOK_DX-HANDLE_DX;b.x=n.x;if(n.x<-BIN_W){st.bins=st.bins.filter(m=>m!==n);st.truck=null;st.score++;engineOff();SFX.score();respawn();}}}
-}
-function rr(x,y,w,h,r,f){cx.fillStyle=f;cx.beginPath();cx.roundRect(x,y,w,h,r);cx.fill();}
-function drawBin(n){const x=n.x-BIN_W/2,y=GROUND-BIN_H;
- if(inBinPlaying(n)){const fr=animFrame('in_bin',st.boy.t,false);cx.save();cx.translate(n.x,GROUND);cx.scale(-1,1);cx.drawImage(fr,-GF_W/2*IB_S,-GF_FOOT*IB_S,GF_W*IB_S,GF_H*IB_S);cx.restore();return;}
- if(img.bin){cx.save();cx.translate(n.x,0);cx.scale(-1,1);cx.drawImage(img.bin,-BIN_W/2,BIN_TOP-6*SB,BIN_W,BIN_H);cx.restore();
-  if(img.bin_lid&&n.lid>0){const e=1-Math.pow(1-n.lid,3);cx.globalAlpha=Math.min(1,n.lid*3);cx.drawImage(img.bin_lid,x,LID_TOP-(1-e)*100,BIN_W,LID_H);cx.globalAlpha=1;}return;}
- rr(x+4,y,BIN_W-8,BIN_H,8,'#3a9d5d');cx.fillStyle='#2c7a47';for(let i=1;i<4;i++)cx.fillRect(x+i*BIN_W/4-2,y+12,4,BIN_H-22);
- cx.fillStyle='#1d5532';cx.fillRect(n.x-MOUTH/2,y-4,MOUTH,6);
- cx.save();cx.translate(x,y-6);cx.rotate(-(1-n.lid)*1.9);rr(-2,-6,BIN_W+4,10,4,'#256b3f');rr(BIN_W/2-10,-12,20,7,3,'#256b3f');cx.restore();}
-function drawBoy(b){if(b.mode==='none')return;const inb=b.mode==='in';
- cx.save();if(inb){cx.beginPath();cx.rect(0,0,W,RIM_Y);cx.clip();}
- const ak=modeAnim(b.mode);if(ak&&animOk(ak)){if(ak!=='in_bin'){const fr=animFrame(ak,b.t,ak==='walk');cx.save();cx.translate(b.x,b.y);if(b.dir<0&&b.mode==='walk')cx.scale(-1,1);cx.drawImage(fr,-GF_W/2*GF_S,-GF_FOOT*GF_S,GF_W*GF_S,GF_H*GF_S);cx.restore();}}
- else if(img.boy_stripe){const ih=BOY_H,iw=ih*img.boy_stripe.width/img.boy_stripe.height;cx.save();cx.translate(b.x,b.y);if(b.mode==='fall'){cx.translate(0,-ih/2);cx.rotate(Math.sin(b.t*14)*0.12);cx.translate(0,ih/2);}if(b.dir<0&&b.mode==='walk')cx.scale(-1,1);cx.drawImage(img.boy_stripe,-iw/2,-ih,iw,ih);cx.restore();}
- else{const x=b.x,y=b.y,sw=b.mode==='walk'?Math.sin(performance.now()/90)*5:0;
-  cx.fillStyle='#345';cx.fillRect(x-12,y-22+0,8,22+sw*0);cx.fillRect(x+4,y-22,8,22);
-  for(let i=0;i<5;i++)rr(x-BOY_W/2+4,y-50+i*6,BOY_W-8,6,0,i%2?'#fff':'#e94b4b');
-  cx.fillStyle='#f6c9a0';cx.beginPath();cx.arc(x,y-58,13,0,7);cx.fill();cx.fillStyle='#4a2c1a';cx.beginPath();cx.arc(x,y-62,13,Math.PI,0);cx.fill();
-  cx.fillStyle='#222';cx.fillRect(x-5,y-59,3,3);cx.fillRect(x+3,y-59,3,3);cx.strokeStyle='#a33';cx.lineWidth=2;cx.beginPath();cx.arc(x,y-54,4,0.2,Math.PI-0.2);cx.stroke();}
- cx.restore();}
-function drawTruck(t){const x=t.x;
- if(img.truck){cx.drawImage(img.truck,x,TRUCK_TOP,TRUCK_W,TRUCK_H);return;}
- const y=TRUCK_TOP;rr(x,y+TRUCK_H*.3,TRUCK_W*.28,TRUCK_H*.6,10,'#f2b134');rr(x+TRUCK_W*.26,y+TRUCK_H*.1,TRUCK_W*.62,TRUCK_H*.75,6,'#5b8c3a');
- cx.fillStyle='#222';[.2,.5,.75].forEach(f=>{cx.beginPath();cx.arc(x+TRUCK_W*f,GROUND-12,14,0,7);cx.fill();});
- cx.strokeStyle='#e8b100';cx.lineWidth=5;cx.beginPath();cx.moveTo(x+TRUCK_W*.88,y+TRUCK_H*.4);cx.lineTo(x+HOOK_DX,HANDLE_Y);cx.stroke();}
+const W = 360, H = 640, GROUND = 600, PLATFORM = 188, BOY_H = 118;
+// 车必须整辆落在屏幕里，所以按宽度缩小，不再为了对齐钩子把整车放大。
+// 钩口用臂端空档 (690,260)，提手用桶身和把手之间的杆 (300,210)。桶镜像后提手在左侧。
+// 桶按同一地面缩放，让钩口高度刚好落到这根杆上。
+const TRUCK_IW = 760, TRUCK_IH = 389, TRUCK_FOOT = 383;
+const HOOK_IX = 690, HOOK_IY = 260;
+const ST = 304 / TRUCK_IW;
+const TRUCK_W = TRUCK_IW * ST, TRUCK_H = TRUCK_IH * ST;
+const TRUCK_TOP = GROUND - TRUCK_FOOT * ST;
+const BIN_IW = 420, BIN_IH = 478, BIN_FOOT = 472;
+const MOUTH_L = 71, MOUTH_R = 314, RIM_IY = 70;
+const HANDLE_IX = 300, HANDLE_IY = 210;
+const SB = ST * (TRUCK_FOOT - HOOK_IY) / (BIN_FOOT - HANDLE_IY);
+const BIN_W = BIN_IW * SB;
+const BIN_H = BIN_IH * SB;
+const BIN_TOP = GROUND - BIN_FOOT * SB;
+const RIM_Y = BIN_TOP + RIM_IY * SB;
+const HANDLE_DX = BIN_W / 2 - HANDLE_IX * SB;
+const HOOK_DX = HOOK_IX * ST;
+const LID_H = 94 * SB;
+const LID_Y = BIN_TOP + 6 * SB;
+const MOUTH_LEFT = (binX) => binX + BIN_W / 2 - MOUTH_R * SB;
+const MOUTH_RIGHT = (binX) => binX + BIN_W / 2 - MOUTH_L * SB;
+const MOUTH_CX = (binX) => (MOUTH_LEFT(binX) + MOUTH_RIGHT(binX)) / 2;
+function binForTruck(tx) { return tx - HANDLE_DX + HOOK_DX; }
+function binDockMin() { return Math.max(BIN_W / 2 + 4, binForTruck(6)); }
+function binDockMax() { return Math.min(W - BIN_W / 2 - 4, binForTruck(W - 6 - TRUCK_W)); }
+const WALK_V = 92, GRAV = 1700, HOP = -210;
+const BIN_V0 = 64, BIN_STEP = 16, BIN_GAP = 250;
+const IN_PEEK = 0.40;
 
-function drawRail(){cx.fillStyle='#8a5a2b';cx.fillRect(0,RAIL_Y+14,W,6);cx.fillStyle='#c98b4a';for(let x=6;x<W;x+=24)cx.fillRect(x,RAIL_Y+20,4,8);}
-function drawCatapult(){const b=st.boy,x=st.cart!=null?st.cart:b.x,k=st.kick>0?Math.sin((0.35-st.kick)/0.35*Math.PI):0;
- rr(x-30,RAIL_Y,60,16,6,'#ff6b6b');cx.fillStyle='#ffd93d';[x-18,x+18].forEach(w=>{cx.beginPath();cx.arc(w,RAIL_Y+17,6,0,7);cx.fill();});
- cx.strokeStyle='#4d96ff';cx.lineWidth=3;cx.beginPath();const top=BOY_Y+4-k*14;for(let i=0;i<=6;i++){const yy=RAIL_Y-(RAIL_Y-top)*i/6;cx.lineTo(x+(i%2?7:-7),yy);}cx.stroke();
- rr(x-26,top-6,52,10,5,'#6bcb77');cx.fillStyle='#fff';cx.font='bold 9px sans-serif';cx.textAlign='center';cx.fillText('弹弹乐',x,RAIL_Y+11);cx.textAlign='left';}
-function drawFun(b){let t='';if(b.mode==='fall')t='呼~';else if(b.mode==='in'&&b.t<1.2)t='耶！';else if(b.mode==='bounce')t='再来！';if(!t)return;
- const y=b.mode==='in'?RIM_Y-20:b.y-BOY_H-8;cx.font='bold 16px sans-serif';cx.textAlign='center';cx.fillStyle='#fff';cx.strokeStyle='#ff9f1c';cx.lineWidth=4;cx.strokeText(t,b.x,y);cx.fillText(t,b.x,y);cx.textAlign='left';}
-function draw(){cx.clearRect(0,0,W,H);cx.fillStyle='#bfe6ff';cx.fillRect(0,0,W,H);cx.fillStyle='#8ccf6a';cx.fillRect(0,GROUND,W,H-GROUND);
- drawRail();
- st.bins.forEach(drawBin);drawCatapult();drawBoy(st.boy);drawFun(st.boy);if(st.truck)drawTruck(st.truck);
- cx.fillStyle='#123';cx.font='bold 22px sans-serif';cx.textAlign='left';cx.fillText('得分 '+st.score,14,36);
- for(let i=0;i<3;i++){cx.fillStyle=i<st.chances?'#ff9f1c':'rgba(0,0,0,.18)';cx.beginPath();cx.arc(W-64-i*26,28,9,0,7);cx.fill();}
- if(st.hintT>0){cx.textAlign='center';cx.font='bold 20px sans-serif';cx.fillStyle='rgba(0,0,0,.6)';cx.fillText('点一下，把他弹进桶里',W/2,H/2);}
- cx.textAlign='left';}
-let last=performance.now();function loop(t){const dt=Math.min(.05,(t-last)/1000);last=t;step(dt);draw();requestAnimationFrame(loop);}
-reset();requestAnimationFrame(loop);
-</script></body></html>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+function fit() {
+  const s = Math.min(innerWidth / W, innerHeight / H), d = devicePixelRatio || 1;
+  cv.style.width = (W * s) + 'px';
+  cv.style.height = (H * s) + 'px';
+  cv.width = Math.round(W * d);
+  cv.height = Math.round(H * d);
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+  const rc = cv.getBoundingClientRect();
+  const m = document.getElementById('mute');
+  m.style.top = (rc.top + 8 * s) + 'px';
+  m.style.left = (rc.right - 8 * s - 36) + 'px';
+}
+addEventListener('resize', fit);
+fit();
+
+const img = {};
+['boy_stripe', 'bin', 'bin_lid', 'truck'].forEach(name => {
+  const im = new Image();
+  im.onload = () => { img[name] = im; };
+  im.src = './' + name + '.png';
+});
+
+const ANIM = { walk: [], fall: [], miss: [], in: [] };
+fetch('./frames.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : {}).then(data => {
+  Object.keys(ANIM).forEach(key => {
+    const list = Array.isArray(data && data[key]) ? data[key] : [];
+    ANIM[key] = list.filter(f => f && f.file).map(f => {
+      const slot = { img: null, ms: +f.ms > 0 ? +f.ms : 100 };
+      const im = new Image();
+      im.onload = () => { slot.img = im; };
+      im.src = './' + f.file;
+      return slot;
+    });
+  });
+}).catch(() => {});
+
+function animReady(key) {
+  const a = ANIM[key];
+  return a.length > 0 && a.every(f => f.img);
+}
+function animMs(key) {
+  return animReady(key) ? ANIM[key].reduce((s, f) => s + f.ms, 0) : 0;
+}
+function poseMs(key) {
+  if (!animReady(key)) return 0;
+  const a = ANIM[key];
+  let n = a.length;
+  if (n > 1 && a[n - 1].ms >= 1000) n -= 1;
+  let ms = 0;
+  for (let i = 0; i < n; i++) ms += a[i].ms;
+  return ms;
+}
+function animFrame(key, t, loop) {
+  const a = ANIM[key];
+  const total = animMs(key);
+  let ms = t * 1000;
+  if (loop) ms %= total;
+  else if (ms >= total) return a[a.length - 1].img;
+  for (let i = 0; i < a.length; i++) {
+    if (ms < a[i].ms) return a[i].img;
+    ms -= a[i].ms;
+  }
+  return a[a.length - 1].img;
+}
+
+const SND_KEY = 'kuaijintong_muted';
+let AC = null, master = null, muted = false, engine = null;
+try { muted = localStorage.getItem(SND_KEY) === '1'; } catch (e) {}
+function unlock() {
+  try {
+    const C = window.AudioContext || window.webkitAudioContext;
+    if (!C) return;
+    if (!AC) {
+      AC = new C();
+      master = AC.createGain();
+      master.gain.value = muted ? 0 : 0.2;
+      master.connect(AC.destination);
+    }
+    if (AC.state === 'suspended') AC.resume().catch(() => {});
+  } catch (e) { AC = null; }
+}
+function audible() { return AC && master && AC.state === 'running'; }
+function env(g, t, dur, v) {
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(v, t + 0.01);
+  g.gain.linearRampToValueAtTime(0, t + dur);
+}
+function tone(type, f0, f1, dur, v, delay) {
+  if (!audible()) return;
+  try {
+    const t = AC.currentTime + (delay || 0);
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(Math.max(1, f0), t);
+    o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    env(g, t, dur, v);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t + dur + 0.02);
+  } catch (e) {}
+}
+function noise(dur, freq, v, delay) {
+  if (!audible()) return;
+  try {
+    const t = AC.currentTime + (delay || 0);
+    const n = Math.ceil(AC.sampleRate * dur);
+    const buf = AC.createBuffer(1, n, AC.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+    s.buffer = buf;
+    f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 0.8;
+    env(g, t, dur, v);
+    s.connect(f); f.connect(g); g.connect(master);
+    s.start(t); s.stop(t + dur + 0.02);
+  } catch (e) {}
+}
+const SFX = {
+  jump() { tone('square', 720, 380, 0.09, 0.28); tone('triangle', 480, 260, 0.1, 0.2, 0.06); },
+  in() { tone('sine', 160, 55, 0.2, 0.9); noise(0.08, 280, 0.25); },
+  lid() { noise(0.035, 3200, 0.55); tone('square', 1600, 900, 0.03, 0.12); },
+  horn() {
+    tone('square', 440, 440, 0.16, 0.16);
+    tone('square', 554, 554, 0.16, 0.12);
+    tone('square', 440, 440, 0.2, 0.16, 0.22);
+    tone('square', 554, 554, 0.2, 0.12, 0.22);
+  },
+  miss() { noise(0.08, 700, 0.45); tone('sine', 220, 110, 0.1, 0.3); },
+  score() { tone('triangle', 660, 660, 0.09, 0.4); tone('triangle', 990, 990, 0.14, 0.4, 0.08); },
+  over() { tone('triangle', 520, 160, 0.55, 0.45); }
+};
+function engineOn() {
+  if (engine || !audible()) return;
+  try {
+    const t = AC.currentTime;
+    const o = AC.createOscillator(), l = AC.createOscillator();
+    const lg = AC.createGain(), f = AC.createBiquadFilter(), g = AC.createGain(), am = AC.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 52;
+    l.frequency.value = 7; lg.gain.value = 0.22;
+    f.type = 'lowpass'; f.frequency.value = 300;
+    am.gain.value = 0.7;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.28, t + 0.08);
+    l.connect(lg); lg.connect(am.gain);
+    o.connect(f); f.connect(am); am.connect(g); g.connect(master);
+    o.start(); l.start();
+    engine = { o, l, g };
+  } catch (e) { engine = null; }
+}
+function engineOff() {
+  if (!engine) return;
+  const e = engine; engine = null;
+  try {
+    const t = AC.currentTime;
+    e.g.gain.cancelScheduledValues(t);
+    e.g.gain.setValueAtTime(e.g.gain.value, t);
+    e.g.gain.linearRampToValueAtTime(0, t + 0.08);
+    e.o.stop(t + 0.1); e.l.stop(t + 0.1);
+  } catch (e2) {}
+}
+
+const muteBtn = document.getElementById('mute');
+function showMute() { muteBtn.textContent = muted ? '🔇' : '🔊'; }
+showMute();
+['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(n => {
+  muteBtn.addEventListener(n, e => e.stopPropagation());
+});
+muteBtn.addEventListener('click', e => {
+  e.preventDefault();
+  unlock();
+  muted = !muted;
+  try { localStorage.setItem(SND_KEY, muted ? '1' : '0'); } catch (err) {}
+  if (master) master.gain.setTargetAtTime(muted ? 0 : 0.2, AC.currentTime, 0.02);
+  showMute();
+  muteBtn.blur();
+});
+['pointerdown', 'touchstart', 'keydown'].forEach(n => {
+  addEventListener(n, unlock, { capture: true, passive: true });
+});
+
+let st;
+function binSpeed() { return BIN_V0 + BIN_STEP * Math.floor(st.score / 3); }
+function makeBin(x) { return { x: x, lid: 0, hold: false }; }
+function reset() {
+  engineOff();
+  st = {
+    score: 0, chances: 3, over: false, hint: true,
+    boy: { x: W * 0.35, y: PLATFORM, vy: 0, dir: 1, mode: 'walk', t: 0, bin: null },
+    bins: [makeBin(W * 0.72)],
+    truck: null
+  };
+  document.getElementById('over').style.display = 'none';
+}
+function jump() {
+  const b = st.boy;
+  if (st.over || b.mode !== 'walk') return;
+  b.mode = 'fall';
+  b.vy = HOP;
+  b.t = 0;
+  b.y = PLATFORM;
+  st.hint = false;
+  SFX.jump();
+}
+cv.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.repeat) return;
+  if (e.target === muteBtn || e.target === document.getElementById('again')) return;
+  e.preventDefault();
+  jump();
+});
+document.getElementById('again').addEventListener('click', e => { e.stopPropagation(); reset(); });
+
+function backToWalk() {
+  const b = st.boy;
+  b.mode = 'walk';
+  b.y = PLATFORM;
+  b.vy = 0;
+  b.t = 0;
+  b.bin = null;
+}
+function finishMiss() {
+  st.chances -= 1;
+  if (st.chances <= 0) {
+    st.over = true;
+    st.boy.mode = 'done';
+    engineOff();
+    SFX.over();
+    document.getElementById('sc').textContent = '得分 ' + st.score;
+    document.getElementById('over').style.display = 'flex';
+  } else backToWalk();
+}
+function step(dt) {
+  const b = st.boy;
+  const busy = b.mode === 'in' || st.truck;
+  if (!busy && !st.over) {
+    const v = binSpeed();
+    st.bins.forEach(n => { n.x -= v * dt; });
+    st.bins = st.bins.filter(n => n.x > -BIN_W);
+    const last = st.bins[st.bins.length - 1];
+    if (!last || last.x < W - BIN_GAP) st.bins.push(makeBin(W + BIN_W * 0.7));
+  }
+  if (b.mode === 'walk') {
+    b.t += dt;
+    b.x += b.dir * WALK_V * dt;
+    if (b.x > W - 28) { b.x = W - 28; b.dir = -1; }
+    if (b.x < 28) { b.x = 28; b.dir = 1; }
+    b.y = PLATFORM;
+  } else if (b.mode === 'fall') {
+    b.t += dt;
+    const prev = b.y;
+    b.vy += GRAV * dt;
+    b.y += b.vy * dt;
+    if (prev < RIM_Y && b.y >= RIM_Y) {
+      const hit = st.bins.find(n => b.x >= MOUTH_LEFT(n.x) && b.x <= MOUTH_RIGHT(n.x));
+      if (hit) {
+        b.mode = 'in';
+        b.bin = hit;
+        hit.hold = true;
+        b.t = 0;
+        b.x = MOUTH_CX(hit.x);
+        b.y = RIM_Y + BOY_H * (1 - IN_PEEK);
+        SFX.in();
+      }
+    }
+    if (b.mode === 'fall' && b.y >= GROUND) {
+      b.y = GROUND;
+      b.vy = 0;
+      b.mode = 'miss';
+      b.t = 0;
+      SFX.miss();
+    }
+  } else if (b.mode === 'miss') {
+    b.t += dt;
+    b.y = GROUND;
+    const need = animReady('miss') ? poseMs('miss') / 1000 : 0.7;
+    if (b.t >= need) finishMiss();
+  } else if (b.mode === 'in') {
+    const n = b.bin;
+    b.t += dt;
+    b.x = MOUTH_CX(n.x);
+    b.y = RIM_Y + BOY_H * (1 - IN_PEEK);
+    const wave = animReady('in') ? poseMs('in') / 1000 : 0.84;
+    if (b.t > wave) {
+      if (n.lid === 0) SFX.lid();
+      n.lid = Math.min(1, n.lid + dt * 3.2);
+    }
+    if (n.lid >= 1 && !st.truck) {
+      const goal = Math.min(binDockMax(), Math.max(binDockMin(), n.x));
+      if (Math.abs(n.x - goal) > 0.6) {
+        n.x += Math.sign(goal - n.x) * Math.min(260 * dt, Math.abs(goal - n.x));
+        b.x = MOUTH_CX(n.x);
+      } else {
+        n.x = goal;
+        st.truck = { x: W + 8, phase: 'in', bin: n, t: 0 };
+        engineOn();
+        SFX.horn();
+      }
+    }
+  }
+  if (st.truck) {
+    const t = st.truck, n = t.bin;
+    const dock = n.x + HANDLE_DX - HOOK_DX;
+    if (t.phase === 'in') {
+      t.x -= 480 * dt;
+      if (t.x <= dock) { t.x = dock; t.phase = 'hold'; t.t = 0; }
+    } else if (t.phase === 'hold') {
+      t.t += dt;
+      t.x = dock;
+      if (t.t > 0.28) t.phase = 'drag';
+    } else {
+      t.x -= 300 * dt;
+      n.x = t.x + HOOK_DX - HANDLE_DX;
+      b.x = MOUTH_CX(n.x);
+      if (n.x < -BIN_W) {
+        st.bins = st.bins.filter(m => m !== n);
+        st.truck = null;
+        st.score += 1;
+        engineOff();
+        SFX.score();
+        backToWalk();
+      }
+    }
+  }
+}
+
+const BOY_FOOT_PX = 530, BOY_HEAD_PX = 62, IN_HEAD_PX = 72;
+const BOY_SCALE = BOY_H / (BOY_FOOT_PX - BOY_HEAD_PX);
+const IN_PEEK_PX = 30;
+function drawBoyAt(footX, footY, mode, t, flip, squat) {
+  const frame = animReady(mode) ? animFrame(mode, t, mode === 'walk') : null;
+  ctx.save();
+  ctx.translate(footX, 0);
+  if (flip) ctx.scale(-1, 1);
+  if (frame) {
+    const anchorPx = mode === 'in' ? IN_HEAD_PX : BOY_FOOT_PX;
+    let anchorY = mode === 'in' ? RIM_Y - IN_PEEK_PX : footY;
+    if (mode === 'in' && st.boy.bin) {
+      const topPad = (IN_HEAD_PX - BOY_HEAD_PX) * BOY_SCALE;
+      const closed = LID_Y + 6 + topPad;
+      const drop = Math.max(0, closed - (RIM_Y - IN_PEEK_PX));
+      anchorY += (st.boy.bin.lid || 0) * drop;
+    }
+    ctx.translate(0, anchorY);
+    if (squat && squat !== 1) ctx.scale(1, squat);
+    const dw = frame.width * BOY_SCALE, dh = frame.height * BOY_SCALE;
+    ctx.drawImage(frame, -dw / 2, -anchorPx * BOY_SCALE, dw, dh);
+  } else if (img.boy_stripe) {
+    const im = img.boy_stripe;
+    const scale = BOY_H / (859 - 6);
+    ctx.translate(0, footY);
+    if (squat && squat !== 1) ctx.scale(1, squat);
+    ctx.drawImage(im, -im.width * scale / 2, -859 * scale, im.width * scale, im.height * scale);
+  } else {
+    ctx.translate(0, footY);
+    ctx.fillStyle = '#345';
+    ctx.fillRect(-12, -BOY_H, 24, BOY_H);
+  }
+  ctx.restore();
+}
+function drawBinBody(n) {
+  const x = n.x - BIN_W / 2;
+  if (img.bin) {
+    ctx.save();
+    ctx.translate(n.x, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img.bin, -BIN_W / 2, BIN_TOP, BIN_W, BIN_H);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = '#3caf55';
+    ctx.fillRect(x, BIN_TOP, BIN_W, BIN_H);
+  }
+}
+function drawLid(n) {
+  if (n.lid <= 0 || !img.bin_lid) return;
+  const drop = (1 - n.lid) * 70;
+  ctx.drawImage(img.bin_lid, n.x - BIN_W / 2, LID_Y - drop, BIN_W, LID_H);
+}
+function drawTruck(t) {
+  if (img.truck) ctx.drawImage(img.truck, t.x, TRUCK_TOP, TRUCK_W, TRUCK_H);
+  else {
+    ctx.fillStyle = '#3a8f3a';
+    ctx.fillRect(t.x, TRUCK_TOP, TRUCK_W, TRUCK_H);
+  }
+}
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#b7e3fb';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#8ed36a';
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = '#d39a55';
+  ctx.fillRect(0, PLATFORM, W, 12);
+  ctx.fillStyle = '#a56b32';
+  ctx.fillRect(0, PLATFORM + 12, W, 5);
+  const b = st.boy;
+  st.bins.forEach(drawBinBody);
+  if (b.mode === 'in') {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, RIM_Y);
+    ctx.clip();
+    drawBoyAt(b.x, b.y, 'in', b.t, false, 1);
+    ctx.restore();
+  } else if (b.mode === 'fall') {
+    drawBoyAt(b.x, b.y, 'fall', b.t, false, 1);
+  } else if (b.mode === 'miss') {
+    const squat = animReady('miss') ? 1 : 0.76;
+    drawBoyAt(b.x, b.y, 'miss', b.t, false, squat);
+  } else if (b.mode === 'walk') {
+    drawBoyAt(b.x, b.y, 'walk', b.t, b.dir < 0, 1);
+  }
+  st.bins.forEach(drawLid);
+  if (st.truck) drawTruck(st.truck);
+  ctx.fillStyle = '#16324a';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('得分 ' + st.score, 14, 34);
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath();
+    ctx.fillStyle = i < st.chances ? '#ff9f1c' : 'rgba(0,0,0,.18)';
+    ctx.arc(168 + i * 22, 28, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (st.hint) {
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillStyle = 'rgba(12,40,60,.72)';
+    ctx.fillText('点一下跳', W / 2, 250);
+  }
+  ctx.textAlign = 'left';
+}
+
+let last = performance.now(), raf = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  step(dt);
+  draw();
+  raf = requestAnimationFrame(loop);
+}
+reset();
+raf = requestAnimationFrame(loop);
+</script>
+</body>
+</html>
