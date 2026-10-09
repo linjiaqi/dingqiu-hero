@@ -24,13 +24,15 @@ canvas{display:block;background:#b7e3fb;touch-action:none}
 #start.ready{opacity:1}
 #sheet .row{display:flex;gap:12px;justify-content:center}
 #swap{font-size:20px;padding:10px 20px;border:0;border-radius:12px;background:#4d96ff;color:#fff}
-#mute{position:fixed;z-index:5;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.82);font-size:18px;line-height:36px;text-align:center}
+#mute,#midSwap{position:fixed;z-index:5;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.82);font-size:18px;line-height:36px;text-align:center;display:none}
+#mute{display:block}
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="c"></canvas></div>
 <button id="mute" type="button" aria-label="静音">🔊</button>
-<div id="over"><div id="sheet"><h2>结束啦</h2><p id="sc">得分 0</p><div class="row"><button id="again" type="button">再玩</button><button id="swap" type="button">换人物</button></div></div></div>
+<button id="midSwap" type="button" aria-label="换人物" title="换人物">👥</button>
+<div id="over"><div id="sheet"><h2 id="ot">结束啦</h2><p id="sc">得分 0</p><div class="row"><button id="again" type="button">再玩本关</button><button id="swap" type="button">换人物</button></div></div></div>
 <div id="sel"><h1>快进桶</h1><p class="tip">选一个人物</p><div id="cards"></div><button id="start" type="button">开始</button></div>
 <script>
 const W = 360, H = 640, GROUND = 600, PLATFORM = 188, BOY_H = 118;
@@ -61,8 +63,15 @@ function binForTruck(tx) { return tx - HANDLE_DX + HOOK_DX; }
 function binDockMin() { return Math.max(BIN_W / 2 + 4, binForTruck(6)); }
 function binDockMax() { return Math.min(W - BIN_W / 2 - 4, binForTruck(W - 6 - TRUCK_W)); }
 const WALK_V = 92, GRAV = 1700, HOP = -210;
-const BIN_V0 = 64, BIN_STEP = 16, BIN_GAP = 250;
 const IN_PEEK = 0.40;
+// 五关：目标分、桶速、间距、开局桶位置。过关后短暂结算再进下一关，通关后结束，不进无限局。
+const LEVELS = [
+  { id:1, name:'第 1 关', goal:5,  speed:52,  gap:320, startX:0.78 },
+  { id:2, name:'第 2 关', goal:8,  speed:68,  gap:280, startX:0.74 },
+  { id:3, name:'第 3 关', goal:10, speed:84,  gap:240, startX:0.70 },
+  { id:4, name:'第 4 关', goal:12, speed:100, gap:210, startX:0.68 },
+  { id:5, name:'第 5 关', goal:15, speed:120, gap:180, startX:0.66 }
+];
 
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 function fit() {
@@ -74,8 +83,12 @@ function fit() {
   ctx.setTransform(d, 0, 0, d, 0, 0);
   const rc = cv.getBoundingClientRect();
   const m = document.getElementById('mute');
-  m.style.top = (rc.top + 8 * s) + 'px';
+  const sw = document.getElementById('midSwap');
+  const top = (rc.top + 8 * s) + 'px';
+  m.style.top = top;
   m.style.left = (rc.right - 8 * s - 36) + 'px';
+  sw.style.top = top;
+  sw.style.left = (rc.right - 8 * s - 36 - 8 - 36) + 'px';
 }
 addEventListener('resize', fit);
 fit();
@@ -265,23 +278,31 @@ muteBtn.addEventListener('click', e => {
 });
 
 let st;
-function binSpeed() { return BIN_V0 + BIN_STEP * Math.floor(st.score / 3); }
 function makeBin(x) { return { x: x, lid: 0, hold: false }; }
+function curLevel() { return LEVELS[Math.min(st.level, LEVELS.length - 1)]; }
+function binSpeed() { return curLevel().speed; }
+function binGap() { return curLevel().gap; }
 let phase = 'select';
-function reset() {
+function setMidSwap(on) { document.getElementById('midSwap').style.display = on ? 'block' : 'none'; }
+function startLevel(levelIdx, keepChances) {
   engineOff();
   phase = 'play';
+  const L = LEVELS[Math.min(levelIdx, LEVELS.length - 1)];
+  const chances = keepChances && st ? st.chances : 3;
   st = {
-    score: 0, chances: 3, over: false, hint: true,
+    level: levelIdx, score: 0, chances: chances, over: false, hint: levelIdx === 0,
+    clearT: 0, win: false, fail: false,
     boy: { x: W * 0.35, y: PLATFORM, vy: 0, dir: 1, mode: 'walk', t: 0, bin: null },
-    bins: [makeBin(W * 0.72)],
+    bins: [makeBin(W * L.startX)],
     truck: null
   };
   document.getElementById('over').style.display = 'none';
+  setMidSwap(true);
 }
+function reset() { startLevel(0, false); }
 function jump() {
   const b = st.boy;
-  if (phase !== 'play' || st.over || b.mode !== 'walk') return;
+  if (phase !== 'play' || st.over || st.clearT > 0 || b.mode !== 'walk') return;
   b.mode = 'fall';
   b.vy = HOP;
   b.t = 0;
@@ -296,8 +317,21 @@ addEventListener('keydown', e => {
   e.preventDefault();
   jump();
 });
-document.getElementById('again').addEventListener('click', e => { e.stopPropagation(); reset(); });
+document.getElementById('again').addEventListener('click', e => {
+  e.stopPropagation();
+  if (st && st.win) startLevel(0, false);
+  else startLevel(st ? st.level : 0, false);
+});
 document.getElementById('swap').addEventListener('click', e => { e.stopPropagation(); showSelect(); });
+const midSwapBtn = document.getElementById('midSwap');
+['pointerdown', 'touchstart', 'mousedown', 'click'].forEach(n => {
+  midSwapBtn.addEventListener(n, e => e.stopPropagation());
+});
+midSwapBtn.addEventListener('click', e => {
+  e.preventDefault(); e.stopPropagation();
+  showSelect();
+  midSwapBtn.blur();
+});
 
 const selEl = document.getElementById('sel'), cardsEl = document.getElementById('cards'), startBtn = document.getElementById('start');
 let picked = charId;
@@ -335,9 +369,10 @@ function drawCards() {
 function showSelect() {
   engineOff();
   phase = 'select';
-  if (st) { st.over = false; st.truck = null; }
+  if (st) { st.over = false; st.truck = null; st.clearT = 0; }
   picked = charId;
   document.getElementById('over').style.display = 'none';
+  setMidSwap(false);
   selEl.style.display = 'flex';
   markCards();
   drawCards();
@@ -359,27 +394,66 @@ function backToWalk() {
   b.t = 0;
   b.bin = null;
 }
+function showEnd(kind) {
+  st.over = true;
+  st.boy.mode = 'done';
+  engineOff();
+  setMidSwap(false);
+  const ot = document.getElementById('ot');
+  const sc = document.getElementById('sc');
+  const again = document.getElementById('again');
+  if (kind === 'win') {
+    st.win = true; st.fail = false;
+    ot.textContent = '恭喜通关';
+    sc.textContent = '五关全部完成！';
+    again.textContent = '再玩一遍';
+  } else {
+    st.win = false; st.fail = true;
+    ot.textContent = '失败啦';
+    sc.textContent = curLevel().name + ' · ' + st.score + '/' + curLevel().goal;
+    again.textContent = '再玩本关';
+  }
+  document.getElementById('over').style.display = 'flex';
+}
 function finishMiss() {
   st.chances -= 1;
   if (st.chances <= 0) {
-    st.over = true;
-    st.boy.mode = 'done';
-    engineOff();
     SFX.over();
-    document.getElementById('sc').textContent = '得分 ' + st.score;
-    document.getElementById('over').style.display = 'flex';
+    showEnd('fail');
+  } else backToWalk();
+}
+function onScore() {
+  st.score += 1;
+  SFX.score();
+  if (st.score >= curLevel().goal) {
+    st.clearT = 1.6;
+    st.boy.mode = 'done';
+    st.bins = [];
+    st.truck = null;
+    engineOff();
   } else backToWalk();
 }
 function step(dt) {
   if (phase !== 'play') return;
+  if (st.clearT > 0) {
+    st.clearT -= dt;
+    if (st.clearT <= 0) {
+      if (st.level + 1 >= LEVELS.length) {
+        SFX.score();
+        showEnd('win');
+      } else startLevel(st.level + 1, true);
+    }
+    return;
+  }
+  if (st.over) return;
   const b = st.boy;
   const busy = b.mode === 'in' || st.truck;
-  if (!busy && !st.over) {
-    const v = binSpeed();
+  if (!busy) {
+    const v = binSpeed(), gap = binGap();
     st.bins.forEach(n => { n.x -= v * dt; });
     st.bins = st.bins.filter(n => n.x > -BIN_W);
     const last = st.bins[st.bins.length - 1];
-    if (!last || last.x < W - BIN_GAP) st.bins.push(makeBin(W + BIN_W * 0.7));
+    if (!last || last.x < W - gap) st.bins.push(makeBin(W + BIN_W * 0.7));
   }
   if (b.mode === 'walk') {
     b.t += dt;
@@ -456,10 +530,8 @@ function step(dt) {
       if (n.x < -BIN_W) {
         st.bins = st.bins.filter(m => m !== n);
         st.truck = null;
-        st.score += 1;
         engineOff();
-        SFX.score();
-        backToWalk();
+        onScore();
       }
     }
   }
@@ -575,40 +647,56 @@ function draw() {
   ctx.fillRect(0, PLATFORM, W, 12);
   ctx.fillStyle = '#a56b32';
   ctx.fillRect(0, PLATFORM + 12, W, 5);
-  const b = st.boy;
-  st.bins.forEach(drawBinBody);
-  if (b.mode === 'in') {
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(0, 0, W, RIM_Y);
-    ctx.clip();
-    drawBoyAt(b.x, b.y, 'in', b.t, false, 1);
-    ctx.restore();
-  } else if (b.mode === 'fall') {
-    drawBoyAt(b.x, b.y, 'fall', b.t, false, 1);
-  } else if (b.mode === 'miss') {
-    const squat = animReady('miss') ? 1 : 0.76;
-    drawBoyAt(b.x, b.y, 'miss', b.t, false, squat);
-  } else if (b.mode === 'walk') {
-    drawBoyAt(b.x, b.y, 'walk', b.t, b.dir < 0, 1);
+  const b = st.boy, L = curLevel();
+  if (st.clearT <= 0) {
+    st.bins.forEach(drawBinBody);
+    if (b.mode === 'in') {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, W, RIM_Y);
+      ctx.clip();
+      drawBoyAt(b.x, b.y, 'in', b.t, false, 1);
+      ctx.restore();
+    } else if (b.mode === 'fall') {
+      drawBoyAt(b.x, b.y, 'fall', b.t, false, 1);
+    } else if (b.mode === 'miss') {
+      const squat = animReady('miss') ? 1 : 0.76;
+      drawBoyAt(b.x, b.y, 'miss', b.t, false, squat);
+    } else if (b.mode === 'walk') {
+      drawBoyAt(b.x, b.y, 'walk', b.t, b.dir < 0, 1);
+    }
+    st.bins.forEach(drawLid);
+    if (st.truck) drawTruck(st.truck);
   }
-  st.bins.forEach(drawLid);
-  if (st.truck) drawTruck(st.truck);
   ctx.fillStyle = '#16324a';
-  ctx.font = 'bold 22px sans-serif';
+  ctx.font = 'bold 18px sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText('得分 ' + st.score, 14, 34);
+  ctx.fillText(L.name, 14, 28);
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText(st.score + '/' + L.goal, 14, 52);
   for (let i = 0; i < 3; i++) {
     ctx.beginPath();
     ctx.fillStyle = i < st.chances ? '#ff9f1c' : 'rgba(0,0,0,.18)';
-    ctx.arc(168 + i * 22, 28, 8, 0, Math.PI * 2);
+    ctx.arc(120 + i * 22, 28, 8, 0, Math.PI * 2);
     ctx.fill();
   }
-  if (st.hint) {
+  if (st.hint && st.clearT <= 0) {
     ctx.textAlign = 'center';
     ctx.font = 'bold 20px sans-serif';
     ctx.fillStyle = 'rgba(12,40,60,.72)';
     ctx.fillText('点一下跳', W / 2, 250);
+  }
+  if (st.clearT > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,.35)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 34px sans-serif';
+    ctx.fillText('过关！', W / 2, H * 0.42);
+    ctx.font = 'bold 22px sans-serif';
+    ctx.fillText(L.name + '  ' + st.score + '/' + L.goal, W / 2, H * 0.42 + 40);
+    ctx.font = '18px sans-serif';
+    ctx.fillText(st.level + 1 < LEVELS.length ? '下一关…' : '即将通关…', W / 2, H * 0.42 + 72);
   }
   ctx.textAlign = 'left';
 }
