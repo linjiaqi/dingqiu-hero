@@ -164,8 +164,18 @@ function animFrame(key, t, loop) {
 }
 
 const SND_KEY = 'kuaijintong_muted';
-let AC = null, master = null, muted = false, engine = null;
+const BGM_VOL = 0.1, BGM_LOOP = 12;
+let AC = null, master = null, bgmGain = null, muted = false, engine = null;
+let bgmWant = false, bgmTimer = null;
 try { muted = localStorage.getItem(SND_KEY) === '1'; } catch (e) {}
+function applyMuteGains() {
+  if (!AC) return;
+  try {
+    const t = AC.currentTime;
+    if (master) master.gain.setTargetAtTime(muted ? 0 : 0.2, t, 0.02);
+    if (bgmGain) bgmGain.gain.setTargetAtTime(muted ? 0 : BGM_VOL, t, 0.02);
+  } catch (e) {}
+}
 function unlock() {
   try {
     const C = window.AudioContext || window.webkitAudioContext;
@@ -175,11 +185,65 @@ function unlock() {
       master = AC.createGain();
       master.gain.value = muted ? 0 : 0.2;
       master.connect(AC.destination);
+      bgmGain = AC.createGain();
+      bgmGain.gain.value = muted ? 0 : BGM_VOL;
+      bgmGain.connect(AC.destination);
     }
-    if (AC.state === 'suspended') AC.resume().catch(() => {});
+    const kick = () => { if (bgmWant && !muted) bgmStart(); };
+    if (AC.state === 'suspended') AC.resume().then(kick).catch(() => {});
+    else kick();
   } catch (e) { AC = null; }
 }
 function audible() { return AC && master && AC.state === 'running'; }
+function bgmStop() {
+  bgmWant = false;
+  if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; }
+}
+function bgmStart() {
+  bgmWant = true;
+  if (!AC || !bgmGain || muted || AC.state !== 'running' || bgmTimer) return;
+  try { scheduleBgm(); } catch (e) { bgmTimer = null; }
+}
+// C 大调五声音阶短句，约 12 秒循环；错误时静默跳过，不挡开局。
+function scheduleBgm() {
+  if (!bgmWant || !AC || !bgmGain) return;
+  const t0 = AC.currentTime + 0.04;
+  const notes = [261.63, 329.63, 392.00, 440.00, 523.25, 440.00, 392.00, 329.63,
+                 293.66, 349.23, 440.00, 523.25, 440.00, 349.23, 293.66, 261.63];
+  const step = BGM_LOOP / notes.length;
+  notes.forEach((f, i) => {
+    const o = AC.createOscillator(), g = AC.createGain(), lp = AC.createBiquadFilter();
+    o.type = 'sine';
+    o.frequency.value = f;
+    lp.type = 'lowpass';
+    lp.frequency.value = 1600;
+    const t = t0 + i * step, dur = step * 0.82;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.5, t + 0.06);
+    g.gain.linearRampToValueAtTime(0.18, t + dur * 0.55);
+    g.gain.linearRampToValueAtTime(0, t + dur);
+    o.connect(lp); lp.connect(g); g.connect(bgmGain);
+    o.start(t); o.stop(t + dur + 0.02);
+  });
+  const bass = AC.createOscillator(), bg = AC.createGain(), blp = AC.createBiquadFilter();
+  bass.type = 'triangle';
+  bass.frequency.value = 130.81;
+  blp.type = 'lowpass';
+  blp.frequency.value = 420;
+  bg.gain.setValueAtTime(0, t0);
+  bg.gain.linearRampToValueAtTime(0.14, t0 + 0.35);
+  bg.gain.setValueAtTime(0.14, t0 + BGM_LOOP - 0.45);
+  bg.gain.linearRampToValueAtTime(0, t0 + BGM_LOOP);
+  bass.connect(blp); blp.connect(bg); bg.connect(bgmGain);
+  bass.start(t0); bass.stop(t0 + BGM_LOOP + 0.02);
+  const wait = Math.max(80, (t0 + BGM_LOOP - AC.currentTime) * 1000 - 40);
+  bgmTimer = setTimeout(() => {
+    bgmTimer = null;
+    if (bgmWant && !muted) {
+      try { scheduleBgm(); } catch (e) {}
+    }
+  }, wait);
+}
 function env(g, t, dur, v) {
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(v, t + 0.01);
@@ -269,7 +333,8 @@ muteBtn.addEventListener('click', e => {
   unlock();
   muted = !muted;
   try { localStorage.setItem(SND_KEY, muted ? '1' : '0'); } catch (err) {}
-  if (master) master.gain.setTargetAtTime(muted ? 0 : 0.2, AC.currentTime, 0.02);
+  applyMuteGains();
+  if (!muted && bgmWant) bgmStart();
   showMute();
   muteBtn.blur();
 });
@@ -287,6 +352,7 @@ function setMidSwap(on) { document.getElementById('midSwap').style.display = on 
 function startLevel(levelIdx, keepChances) {
   engineOff();
   phase = 'play';
+  bgmStart();
   const L = LEVELS[Math.min(levelIdx, LEVELS.length - 1)];
   const chances = keepChances && st ? st.chances : 3;
   st = {
@@ -368,6 +434,7 @@ function drawCards() {
 }
 function showSelect() {
   engineOff();
+  bgmStop();
   phase = 'select';
   if (st) { st.over = false; st.truck = null; st.clearT = 0; }
   picked = charId;
@@ -398,6 +465,7 @@ function showEnd(kind) {
   st.over = true;
   st.boy.mode = 'done';
   engineOff();
+  bgmStop();
   setMidSwap(false);
   const ot = document.getElementById('ot');
   const sc = document.getElementById('sc');
