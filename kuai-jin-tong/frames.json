@@ -1,146 +1,440 @@
 {
- "walk": [
-  {
-   "file": "boy_walk_v2_0.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_1.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_2.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_3.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_4.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_5.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_6.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_walk_v2_7.png",
-   "ms": 120
-  }
- ],
- "fall": [
-  {
-   "file": "boy_fall_v2_0.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_1.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_2.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_3.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_4.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_5.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_6.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_7.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_8.png",
-   "ms": 90
-  },
-  {
-   "file": "boy_fall_v2_9.png",
-   "ms": 1000
-  }
- ],
- "miss": [
-  {
-   "file": "boy_miss_v2_0.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_1.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_2.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_3.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_4.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_5.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_6.png",
-   "ms": 100
-  },
-  {
-   "file": "boy_miss_v2_7.png",
-   "ms": 1000
-  }
- ],
- "in": [
-  {
-   "file": "boy_in_v2_0.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_1.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_2.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_3.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_4.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_5.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_6.png",
-   "ms": 120
-  },
-  {
-   "file": "boy_in_v2_7.png",
-   "ms": 1000
-  }
- ]
+ "stripe": {
+  "walk": [
+   {
+    "file": "boy_walk_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_walk_v2_7.png",
+    "ms": 120
+   }
+  ],
+  "fall": [
+   {
+    "file": "boy_fall_v2_0.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_1.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_2.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_3.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_4.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_5.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_6.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_7.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_8.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_fall_v2_9.png",
+    "ms": 1000
+   }
+  ],
+  "miss": [
+   {
+    "file": "boy_miss_v2_0.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_1.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_2.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_3.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_4.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_5.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_6.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_miss_v2_7.png",
+    "ms": 1000
+   }
+  ],
+  "in": [
+   {
+    "file": "boy_in_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_in_v2_7.png",
+    "ms": 1000
+   }
+  ]
+ },
+ "jacket": {
+  "walk": [
+   {
+    "file": "boy_jacket_walk_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_walk_v2_7.png",
+    "ms": 120
+   }
+  ],
+  "fall": [
+   {
+    "file": "boy_jacket_fall_v2_0.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_1.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_2.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_3.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_4.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_5.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_6.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_7.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_8.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_jacket_fall_v2_9.png",
+    "ms": 1000
+   }
+  ],
+  "miss": [
+   {
+    "file": "boy_jacket_miss_v2_0.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_1.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_2.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_3.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_4.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_5.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_6.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_jacket_miss_v2_7.png",
+    "ms": 1000
+   }
+  ],
+  "in": [
+   {
+    "file": "boy_jacket_in_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_jacket_in_v2_7.png",
+    "ms": 1000
+   }
+  ]
+ },
+ "pilot": {
+  "walk": [
+   {
+    "file": "boy_pilot_walk_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_walk_v2_7.png",
+    "ms": 120
+   }
+  ],
+  "fall": [
+   {
+    "file": "boy_pilot_fall_v2_0.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_1.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_2.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_3.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_4.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_5.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_6.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_7.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_8.png",
+    "ms": 90
+   },
+   {
+    "file": "boy_pilot_fall_v2_9.png",
+    "ms": 1000
+   }
+  ],
+  "miss": [
+   {
+    "file": "boy_pilot_miss_v2_0.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_1.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_2.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_3.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_4.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_5.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_6.png",
+    "ms": 100
+   },
+   {
+    "file": "boy_pilot_miss_v2_7.png",
+    "ms": 1000
+   }
+  ],
+  "in": [
+   {
+    "file": "boy_pilot_in_v2_0.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_1.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_2.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_3.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_4.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_5.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_6.png",
+    "ms": 120
+   },
+   {
+    "file": "boy_pilot_in_v2_7.png",
+    "ms": 1000
+   }
+  ]
+ }
 }

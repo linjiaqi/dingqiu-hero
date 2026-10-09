@@ -13,13 +13,25 @@ canvas{display:block;background:#b7e3fb;touch-action:none}
 #sheet h2{margin:0 0 8px;font-size:28px}
 #sheet p{font-size:22px;margin:8px 0 18px}
 #again{font-size:20px;padding:10px 26px;border:0;border-radius:12px;background:#ff9f1c;color:#fff}
+#sel{position:fixed;inset:0;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;background:linear-gradient(#b7e3fb,#8ed36a);z-index:4}
+#sel h1{margin:0;font-size:34px;color:#16324a;letter-spacing:2px}
+#sel .tip{margin:0;color:#24506e;font-size:15px}
+#cards{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;padding:0 10px}
+.card{width:100px;padding:8px 6px 10px;border:3px solid transparent;border-radius:16px;background:rgba(255,255,255,.85);text-align:center;font-size:15px;color:#16324a}
+.card canvas{display:block;width:88px;height:110px;margin:0 auto 6px;border-radius:10px;background:#e8f4fb}
+.card.on{border-color:#ff9f1c;background:#fff;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+#start{font-size:22px;padding:12px 44px;border:0;border-radius:14px;background:#ff9f1c;color:#fff;opacity:.45}
+#start.ready{opacity:1}
+#sheet .row{display:flex;gap:12px;justify-content:center}
+#swap{font-size:20px;padding:10px 20px;border:0;border-radius:12px;background:#4d96ff;color:#fff}
 #mute{position:fixed;z-index:5;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:rgba(255,255,255,.82);font-size:18px;line-height:36px;text-align:center}
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="c"></canvas></div>
 <button id="mute" type="button" aria-label="静音">🔊</button>
-<div id="over"><div id="sheet"><h2>结束啦</h2><p id="sc">得分 0</p><button id="again" type="button">再玩一次</button></div></div>
+<div id="over"><div id="sheet"><h2>结束啦</h2><p id="sc">得分 0</p><div class="row"><button id="again" type="button">再玩</button><button id="swap" type="button">换人物</button></div></div></div>
+<div id="sel"><h1>快进桶</h1><p class="tip">选一个人物</p><div id="cards"></div><button id="start" type="button">开始</button></div>
 <script>
 const W = 360, H = 640, GROUND = 600, PLATFORM = 188, BOY_H = 118;
 // 车必须整辆落在屏幕里，所以按宽度缩小，不再为了对齐钩子把整车放大。
@@ -69,36 +81,56 @@ addEventListener('resize', fit);
 fit();
 
 const img = {};
-['boy_stripe', 'bin', 'bin_lid', 'truck'].forEach(name => {
+function loadImg(name, done) {
   const im = new Image();
-  im.onload = () => { img[name] = im; };
+  im.onload = () => { img[name] = im; if (done) done(); };
+  im.onerror = () => {};
   im.src = './' + name + '.png';
-});
+}
+['bin', 'bin_lid', 'truck'].forEach(n => loadImg(n));
 
-const ANIM = { walk: [], fall: [], miss: [], in: [] };
+// 三个人物，文件名互不串用。静态图缺了就回退 boy_stripe.png，再缺就画色块。
+const STATES = ['walk', 'fall', 'miss', 'in'];
+const CHARS = {
+  stripe: { name: '条纹衫', still: 'boy_stripe', color: '#2f7d5b' },
+  jacket: { name: '黑外套', still: 'boy_jacket', color: '#33363d' },
+  pilot: { name: '蓝机场同服', still: 'boy_pilot', color: '#3a6fc4' }
+};
+const CHAR_IDS = Object.keys(CHARS);
+const CHAR_KEY = 'kuaijintong_char';
+let charId = 'stripe';
+try { const v = localStorage.getItem(CHAR_KEY); if (CHARS[v]) charId = v; } catch (e) {}
+CHAR_IDS.forEach(id => loadImg(CHARS[id].still, () => drawCards()));
+
+const ANIMS = {};
+CHAR_IDS.forEach(id => { ANIMS[id] = { walk: [], fall: [], miss: [], in: [] }; });
 fetch('./frames.json', { cache: 'no-cache' }).then(r => r.ok ? r.json() : {}).then(data => {
-  Object.keys(ANIM).forEach(key => {
-    const list = Array.isArray(data && data[key]) ? data[key] : [];
-    ANIM[key] = list.filter(f => f && f.file).map(f => {
-      const slot = { img: null, ms: +f.ms > 0 ? +f.ms : 100 };
-      const im = new Image();
-      im.onload = () => { slot.img = im; };
-      im.src = './' + f.file;
-      return slot;
+  CHAR_IDS.forEach(id => {
+    const group = data && typeof data[id] === 'object' ? data[id] : {};
+    STATES.forEach(key => {
+      const list = Array.isArray(group[key]) ? group[key] : [];
+      ANIMS[id][key] = list.filter(f => f && f.file).map(f => {
+        const slot = { img: null, ms: +f.ms > 0 ? +f.ms : 100 };
+        const im = new Image();
+        im.onload = () => { slot.img = im; };
+        im.onerror = () => { slot.bad = true; };
+        im.src = './' + f.file;
+        return slot;
+      });
     });
   });
 }).catch(() => {});
 
 function animReady(key) {
-  const a = ANIM[key];
+  const a = ANIMS[charId][key];
   return a.length > 0 && a.every(f => f.img);
 }
 function animMs(key) {
-  return animReady(key) ? ANIM[key].reduce((s, f) => s + f.ms, 0) : 0;
+  return animReady(key) ? ANIMS[charId][key].reduce((s, f) => s + f.ms, 0) : 0;
 }
 function poseMs(key) {
   if (!animReady(key)) return 0;
-  const a = ANIM[key];
+  const a = ANIMS[charId][key];
   let n = a.length;
   if (n > 1 && a[n - 1].ms >= 1000) n -= 1;
   let ms = 0;
@@ -106,7 +138,7 @@ function poseMs(key) {
   return ms;
 }
 function animFrame(key, t, loop) {
-  const a = ANIM[key];
+  const a = ANIMS[charId][key];
   const total = animMs(key);
   let ms = t * 1000;
   if (loop) ms %= total;
@@ -235,8 +267,10 @@ muteBtn.addEventListener('click', e => {
 let st;
 function binSpeed() { return BIN_V0 + BIN_STEP * Math.floor(st.score / 3); }
 function makeBin(x) { return { x: x, lid: 0, hold: false }; }
+let phase = 'select';
 function reset() {
   engineOff();
+  phase = 'play';
   st = {
     score: 0, chances: 3, over: false, hint: true,
     boy: { x: W * 0.35, y: PLATFORM, vy: 0, dir: 1, mode: 'walk', t: 0, bin: null },
@@ -247,7 +281,7 @@ function reset() {
 }
 function jump() {
   const b = st.boy;
-  if (st.over || b.mode !== 'walk') return;
+  if (phase !== 'play' || st.over || b.mode !== 'walk') return;
   b.mode = 'fall';
   b.vy = HOP;
   b.t = 0;
@@ -258,11 +292,64 @@ function jump() {
 cv.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
 addEventListener('keydown', e => {
   if (e.code !== 'Space' || e.repeat) return;
-  if (e.target === muteBtn || e.target === document.getElementById('again')) return;
+  if (phase !== 'play' || e.target.tagName === 'BUTTON') return;
   e.preventDefault();
   jump();
 });
 document.getElementById('again').addEventListener('click', e => { e.stopPropagation(); reset(); });
+document.getElementById('swap').addEventListener('click', e => { e.stopPropagation(); showSelect(); });
+
+const selEl = document.getElementById('sel'), cardsEl = document.getElementById('cards'), startBtn = document.getElementById('start');
+let picked = charId;
+CHAR_IDS.forEach(id => {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'card';
+  card.dataset.id = id;
+  const c = document.createElement('canvas');
+  c.width = 176; c.height = 220;
+  const label = document.createElement('div');
+  label.textContent = CHARS[id].name;
+  card.appendChild(c); card.appendChild(label);
+  card.addEventListener('click', e => { e.stopPropagation(); picked = id; markCards(); });
+  cardsEl.appendChild(card);
+});
+function markCards() {
+  cardsEl.querySelectorAll('.card').forEach(el => el.classList.toggle('on', el.dataset.id === picked));
+  startBtn.classList.toggle('ready', !!CHARS[picked]);
+}
+function drawCards() {
+  cardsEl.querySelectorAll('.card').forEach(el => {
+    const id = el.dataset.id, c = el.querySelector('canvas'), g = c.getContext('2d'), ch = CHARS[id];
+    g.clearRect(0, 0, c.width, c.height);
+    const im = img[ch.still];
+    if (im) {
+      // 静态图裁上半身做头像
+      const sw = im.width * 0.8, sh = sw * c.height / c.width;
+      g.drawImage(im, (im.width - sw) / 2, 0, sw, Math.min(sh, im.height), 0, 0, c.width, c.height * Math.min(1, im.height / sh));
+    } else {
+      placeholder(g, c.width / 2, c.height * 0.92, c.height * 0.85, ch, true);
+    }
+  });
+}
+function showSelect() {
+  engineOff();
+  phase = 'select';
+  if (st) { st.over = false; st.truck = null; }
+  picked = charId;
+  document.getElementById('over').style.display = 'none';
+  selEl.style.display = 'flex';
+  markCards();
+  drawCards();
+}
+startBtn.addEventListener('click', e => {
+  e.stopPropagation();
+  if (!CHARS[picked]) return;
+  charId = picked;
+  try { localStorage.setItem(CHAR_KEY, charId); } catch (err) {}
+  selEl.style.display = 'none';
+  reset();
+});
 
 function backToWalk() {
   const b = st.boy;
@@ -284,6 +371,7 @@ function finishMiss() {
   } else backToWalk();
 }
 function step(dt) {
+  if (phase !== 'play') return;
   const b = st.boy;
   const busy = b.mode === 'in' || st.truck;
   if (!busy && !st.over) {
@@ -398,18 +486,54 @@ function drawBoyAt(footX, footY, mode, t, flip, squat) {
     if (squat && squat !== 1) ctx.scale(1, squat);
     const dw = frame.width * BOY_SCALE, dh = frame.height * BOY_SCALE;
     ctx.drawImage(frame, -dw / 2, -anchorPx * BOY_SCALE, dw, dh);
-  } else if (img.boy_stripe) {
-    const im = img.boy_stripe;
-    const scale = BOY_H / (859 - 6);
-    ctx.translate(0, footY);
-    if (squat && squat !== 1) ctx.scale(1, squat);
-    ctx.drawImage(im, -im.width * scale / 2, -859 * scale, im.width * scale, im.height * scale);
   } else {
-    ctx.translate(0, footY);
-    ctx.fillStyle = '#345';
-    ctx.fillRect(-12, -BOY_H, 24, BOY_H);
+    // 静态图：进桶时随盖子再往下藏，桶沿 clip 会把整个人遮住
+    let y = footY;
+    if (mode === 'in' && st.boy.bin) y += (st.boy.bin.lid || 0) * (BOY_H * IN_PEEK + 6);
+    ctx.translate(0, y);
+    if (squat && squat !== 1) ctx.scale(1, squat);
+    const ch = CHARS[charId];
+    const im = img[ch.still] || img.boy_stripe;
+    if (im) {
+      const isStripe = im === img.boy_stripe;
+      const foot = isStripe ? 859 : im.height, head = isStripe ? 6 : 0;
+      const scale = BOY_H / (foot - head);
+      ctx.drawImage(im, -im.width * scale / 2, -foot * scale, im.width * scale, im.height * scale);
+    } else {
+      placeholder(ctx, 0, 0, BOY_H, ch, false);
+    }
   }
   ctx.restore();
+}
+// 色块占位：圆头 + 身体，可选写中文名
+function placeholder(g, cx, footY, h, ch, withName) {
+  g.save();
+  g.fillStyle = ch.color;
+  g.beginPath();
+  g.roundRect(cx - h * 0.18, footY - h * 0.72, h * 0.36, h * 0.72, h * 0.08);
+  g.fill();
+  g.fillStyle = '#f3c9a0';
+  g.beginPath();
+  g.arc(cx, footY - h * 0.84, h * 0.15, 0, Math.PI * 2);
+  g.fill();
+  g.fillStyle = '#2b1d14';
+  g.beginPath();
+  g.arc(cx, footY - h * 0.88, h * 0.15, Math.PI, 0);
+  g.fill();
+  if (withName) {
+    let fs = Math.round(h * 0.11);
+    g.font = 'bold ' + fs + 'px sans-serif';
+    const maxW = h * 0.62;
+    const tw = g.measureText(ch.name).width;
+    if (tw > maxW) { fs = Math.floor(fs * maxW / tw); g.font = 'bold ' + fs + 'px sans-serif'; }
+    g.textAlign = 'center';
+    g.lineWidth = Math.max(2, fs * 0.22);
+    g.strokeStyle = 'rgba(0,0,0,.55)';
+    g.strokeText(ch.name, cx, footY - h * 0.32);
+    g.fillStyle = '#fff';
+    g.fillText(ch.name, cx, footY - h * 0.32);
+  }
+  g.restore();
 }
 function drawBinBody(n) {
   const x = n.x - BIN_W / 2;
@@ -437,6 +561,11 @@ function drawTruck(t) {
   }
 }
 function draw() {
+  if (phase !== 'play') {
+    ctx.fillStyle = '#b7e3fb';
+    ctx.fillRect(0, 0, W, H);
+    return;
+  }
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#b7e3fb';
   ctx.fillRect(0, 0, W, H);
@@ -492,7 +621,7 @@ function loop(now) {
   draw();
   raf = requestAnimationFrame(loop);
 }
-reset();
+showSelect();
 raf = requestAnimationFrame(loop);
 </script>
 </body>
